@@ -1,0 +1,15 @@
+# Track the ONNX embedding model (~87 MB binary) with Git LFS.
+# Without this, git refuses the push (GitHub blocks files > 100 MB).
+*.onnx filter=lfs diff=lfs merge=lfs -text
+
+# Normalize text files to LF on commit (this is a fresh repo).
+* text=auto eol=lf
+
+# Keep line-based source files LF even on Windows checkouts.
+*.cs   text eol=lf
+*.js   text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.md   text eol=lf
+*.yaml text eol=lf
+*.sh   text eol=lf
