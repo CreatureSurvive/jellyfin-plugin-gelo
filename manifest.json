@@ -14,6 +14,14 @@
         "sourceUrl": "https://github.com/CreatureSurvive/jellyfin-plugin-gelo/releases/download/v1.0.0.0/gelo-recommendations_1.0.0.0.zip",
         "checksum": "1591e489870194c700dcb8dce99df472dac74da3f51ab2e9656bac0e1142d7e5",
         "timestamp": "2026-07-14T18:30:27Z"
+      },
+      {
+        "version": "1.1.0.0",
+        "changelog": "\nClient-facing API additions: a non-admin readiness probe, a flat ranked list, and shelf shaping.\n\n### Added\n- **`GET /Ping`** — non-admin readiness probe returning `{ Enabled, EmbeddingsReady, ItemCount, Ready }`\n  for any authenticated user (no elevation), so regular clients can detect Gelo without hitting the\n  admin-only `/Status`. `Ready` reflects servability (enabled + indexed items); `EmbeddingsReady` is\n  reported separately as the lazily-loaded ONNX-session flag.\n- **`GET /Users/{userId}/Recommendations`** — flat ranked \"for you\" list (the engine's primary\n  surface): cosine similarity to the user's taste centroid, re-ranked by the trained model when\n  enabled, with a community-rating cold-start fallback. Supports `?limit&unwatched&type` (`unwatched`\n  defaults to true, excluding items the user has already engaged with).\n\n### Changed\n- **`GET /Users/{userId}/Shelves`** gains optional `?limit&unwatched&type` query params — a coarse\n  post-filter applied after the diversity pipeline (`limit` caps items per shelf, `unwatched` drops\n  played items, `type` filters by item type).\n",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/CreatureSurvive/jellyfin-plugin-gelo/releases/download/v1.1.0.0/gelo-recommendations_1.1.0.0.zip",
+        "checksum": "97d6218f1bf760dcce8af7525a665b3283b1f57c3d803af2878d18b0a8620f19",
+        "timestamp": "2026-07-14T22:02:59Z"
       }
     ]
   }
