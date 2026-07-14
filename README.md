@@ -150,17 +150,33 @@ Every setting overrides the engine default on the hot path and can be changed wi
 
 ## REST API
 
-All routes are under `/CustomRecommendations` and authenticate with the calling Jellyfin user's
-token (the web client attaches it automatically).
+All routes are under `/CustomRecommendations`. Every route is available to any authenticated
+Jellyfin user (the web client attaches the token automatically) **except** `/Status`, which requires
+an administrator. `/Ping` is the non-admin readiness probe for clients that need to detect Gelo
+without elevation.
 
 | Method | Path | Returns |
 |---|---|---|
-| `GET` | `/Items/{itemId}/Similar` | Ranked similar items (`Id`, `Name`, `Type`, `Score`) |
-| `GET` | `/Users/{userId}/Shelves` | Home shelves (`Title`, `Paradigm`, `Items[]`) |
-| `GET` | `/Status` | Engine status (`ItemCount`, `Dimension`, `EmbeddingsReady`, `LastFullReindex`, `ModelId`) |
+| `GET` | `/Ping` | Non-admin readiness probe: `{ Enabled, EmbeddingsReady, ItemCount, Ready }` |
+| `GET` | `/Items/{itemId}/Similar` | Ranked similar items (`Id`, `Name`, `Type`, `Score`); `?limit&unwatched&type&userId&collection` |
+| `GET` | `/Users/{userId}/Shelves` | Home shelves (`Title`, `Paradigm`, `Items[]`); optional `?limit&unwatched&type` |
+| `GET` | `/Users/{userId}/Recommendations` | Flat ranked "for you" list (`Id`, `Name`, `Type`, `Score`); optional `?limit&unwatched&type` |
+| `GET` | `/Status` | Admin-only engine status (`ItemCount`, `Dimension`, `EmbeddingsReady`, `LastFullReindex`, `ModelId`) |
 | `POST` | `/Users/{userId}/Feedback` | Record `more` / `less` for an item (body: `{ "itemId", "kind" }`) |
 | `GET` | `/Users/{userId}/Feedback` | List recorded feedback |
 | `DELETE` | `/Users/{userId}/Feedback/{itemId}` | Remove feedback for an item |
+
+- **`/Ping`** is how a regular client detects that Gelo is installed and ready. `Ready` is true when
+  the plugin is enabled and at least one item is indexed. `EmbeddingsReady` is reported separately and
+  only reflects the lazily-loaded ONNX session — it can be `false` right after a restart even though
+  serving already works from the cached vectors.
+- **`/Recommendations`** returns a single flat ranked list (the engine's primary surface): cosine
+  similarity to the user's taste centroid, re-ranked by the trained model when enabled, with a
+  community-rating fallback for cold users. `unwatched` defaults to `true` (excludes items the user
+  has already engaged with).
+- **`/Shelves`** params (`limit` caps items per shelf, `unwatched` drops played items, `type` filters)
+  are a coarse post-filter applied after the diversity pipeline — prefer server config for structural
+  control.
 
 Feedback is sticky: `less` suppresses an item from shelves; `more` nudges it (and similar items) up.
 

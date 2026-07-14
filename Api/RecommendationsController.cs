@@ -50,14 +50,34 @@ public sealed class RecommendationsController : ControllerBase
 
     /// <summary>GET /CustomRecommendations/Users/{userId}/Shelves</summary>
     [HttpGet("Users/{userId}/Shelves")]
-    public ActionResult<List<ShelfDto>> Shelves([FromRoute] Guid userId)
+    public ActionResult<List<ShelfDto>> Shelves(
+        [FromRoute] Guid userId,
+        [FromQuery] int? limit = null,
+        [FromQuery] bool unwatched = false,
+        [FromQuery] string? type = null)
     {
         if (userId == Guid.Empty)
         {
             return BadRequest("Invalid userId.");
         }
 
-        return Ok(_recommendations.Shelves(userId));
+        return Ok(_recommendations.Shelves(userId, limit, unwatched, type));
+    }
+
+    /// <summary>GET /CustomRecommendations/Users/{userId}/Recommendations — flat ranked "for you" list.</summary>
+    [HttpGet("Users/{userId}/Recommendations")]
+    public ActionResult<List<SimilarItemDto>> Recommendations(
+        [FromRoute] Guid userId,
+        [FromQuery] int limit = 24,
+        [FromQuery] bool unwatched = true,
+        [FromQuery] string? type = null)
+    {
+        if (userId == Guid.Empty)
+        {
+            return BadRequest("Invalid userId.");
+        }
+
+        return Ok(_recommendations.Recommendations(userId, limit, unwatched, type));
     }
 
     /// <summary>GET /CustomRecommendations/Status (admin only)</summary>
@@ -66,6 +86,13 @@ public sealed class RecommendationsController : ControllerBase
     public ActionResult<StatusDto> Status()
     {
         return Ok(_recommendations.Status());
+    }
+
+    /// <summary>GET /CustomRecommendations/Ping — non-admin readiness probe (any authenticated user).</summary>
+    [HttpGet("Ping")]
+    public ActionResult<PingDto> Ping()
+    {
+        return Ok(_recommendations.Ping());
     }
 
     // ───────────────────────────────── Feedback (more/less) ─────────────────────────────────

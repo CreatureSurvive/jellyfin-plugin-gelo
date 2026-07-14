@@ -19,6 +19,14 @@ public sealed record StatusDto(
     string? LastFullReindex,
     string? ModelId);
 
+/// <summary>
+/// Lightweight readiness probe for ANY authenticated user (no admin elevation). Lets a regular
+/// client detect that Gelo is installed, enabled, and has finished indexing, without hitting the
+/// admin-only <c>/Status</c> endpoint. <see cref="Ready"/> is true only when the engine is enabled,
+/// embeddings are loaded, and at least one item is indexed.
+/// </summary>
+public sealed record PingDto(bool Enabled, bool EmbeddingsReady, int ItemCount, bool Ready);
+
 /// <summary>Body for POST .../Feedback. <c>Kind</c> is "more" or "less".</summary>
 public sealed record FeedbackRequest(Guid ItemId, string Kind);
 

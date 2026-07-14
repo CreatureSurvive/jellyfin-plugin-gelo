@@ -83,7 +83,81 @@ public sealed class RecommendationService
             .ToList();
     }
 
-    public List<ShelfDto> Shelves(Guid userId)
+    /// <summary>
+    /// Flat "Recommended For You" list — the engine's primary surface. Ranks the whole library by
+    /// cosine similarity to the user's taste centroid and, when the trained ranker is enabled,
+    /// re-orders an oversampled pool by its predicted engagement probability. Cold users (no profile)
+    /// fall back to a community-rating ranking. When <paramref name="unwatched"/> is true (the
+    /// default), items the user has already engaged with are excluded.
+    /// </summary>
+    public List<SimilarItemDto> Recommendations(Guid userId, int limit, bool unwatched, string? type)
+    {
+        if (IsDisabled)
+        {
+            return new List<SimilarItemDto>();
+        }
+
+        var items = _store.GetAllItems();
+        if (items.Count == 0)
+        {
+            return new List<SimilarItemDto>();
+        }
+
+        limit = Math.Clamp(limit, 1, 100);
+
+        var cfg = Plugin.Instance?.Configuration;
+        var interactions = _store.GetInteractionsForUser(userId);
+        var watchedThreshold = Effective(cfg?.WatchedCompletionThreshold, Tuning.WatchedCompletionThreshold, 0, 1);
+        var watchedCount = interactions.Count(ix => ix.CompletionPct > watchedThreshold);
+        var contentMin = EffectiveInt(cfg?.ContentSimilarityMinWatched, Tuning.ContentSimilarityMinWatched, 0, 1000);
+
+        // Predicate: type filter + "less"-feedback suppression (via BuildPredicate), plus an
+        // unwatched guard that drops anything the user has already engaged with.
+        var basePredicate = BuildPredicate(type, unwatched: false, userId, null);
+        var engaged = unwatched ? interactions.Select(i => i.ItemId).ToHashSet() : null;
+        bool Pred(IndexedItem it)
+            => (basePredicate is null || basePredicate(it)) && (engaged is null || !engaged.Contains(it.Id));
+
+        var centroid = (watchedCount >= contentMin && interactions.Count > 0) ? GetCentroid(userId) : null;
+        if (centroid is not null && centroid.ItemCount > 0)
+        {
+            // Warm: cosine to the taste centroid over an oversampled pool, optional trained rerank.
+            var poolSize = Math.Min(limit * 5, 100);
+            var pool = VectorMath.TopKSimilar(centroid.Vector, items, null, poolSize, Pred);
+
+            IEnumerable<(IndexedItem Item, float Affinity)> ranked = pool.Select(p => (p.Item, p.Score));
+            if (cfg?.EnableTier2Ranker is true && _ranker.IsAvailable(userId) && pool.Count > 0)
+            {
+                var poolItems = pool.Select(p => p.Item).ToList();
+                var aff = pool.ToDictionary(p => p.Item.Id, p => p.Score);
+                var probs = _ranker.Score(userId, poolItems, aff);
+                if (probs is { Length: > 0 } && probs.Length == pool.Count)
+                {
+                    ranked = pool
+                        .Select((p, i) => (p.Item, Affinity: p.Score, Prob: probs[i]))
+                        .OrderByDescending(t => t.Prob)
+                        .ThenByDescending(t => t.Affinity)
+                        .Select(t => (t.Item, t.Affinity));
+                }
+            }
+
+            return ranked
+                .Take(limit)
+                .Select(t => new SimilarItemDto(t.Item.Id, t.Item.Name, t.Item.ItemType, t.Affinity))
+                .ToList();
+        }
+
+        // Cold: no taste profile yet — rank by community rating, then recency.
+        return items
+            .Where(i => i.Vector.Length > 0 && Pred(i))
+            .OrderByDescending(i => i.CommunityRating ?? 0)
+            .ThenByDescending(i => i.DateCreatedTicks ?? 0)
+            .Take(limit)
+            .Select(i => new SimilarItemDto(i.Id, i.Name, i.ItemType, i.CommunityRating.HasValue ? (float)i.CommunityRating.Value : 0f))
+            .ToList();
+    }
+
+    public List<ShelfDto> Shelves(Guid userId, int? limit = null, bool unwatched = false, string? type = null)
     {
         if (IsDisabled)
         {
@@ -104,31 +178,87 @@ public sealed class RecommendationService
         var watchedThreshold = Effective(cfg?.WatchedCompletionThreshold, Tuning.WatchedCompletionThreshold, 0, 1);
         var watchedCount = interactions.Count(ix => ix.CompletionPct > watchedThreshold);
 
+        List<ShelfDto> result;
+
         // Phase 0 — ruleBased (cold start): no engagement yet.
         var contentMin = EffectiveInt(cfg?.ContentSimilarityMinWatched, Tuning.ContentSimilarityMinWatched, 0, 1000);
         if (watchedCount < contentMin)
         {
-            return new RuleBasedShelves(items, feedback).Build();
+            result = new RuleBasedShelves(items, feedback).Build();
         }
-
-        // Phase 1-9 (contentSimilarity) and 10+ (fullModel) both build a taste profile + centroid
-        // and let SmartShelfEngine rerank by centroid affinity. When the Phase-2 ranker is enabled AND
-        // the user has crossed FullModelMinWatched, hand the trained re-ranker down: RerankPipeline then
-        // orders candidates by the model's P(engage) instead of the heuristic (falling back gracefully
-        // if no model is trained yet).
-        var (profile, tables) = _profileBuilder.Build(userId);
-        if (profile.IsCold && profile.TopCollections.Count == 0)
+        else
         {
-            return new RuleBasedShelves(items, feedback).Build();
+            // Phase 1-9 (contentSimilarity) and 10+ (fullModel) both build a taste profile + centroid
+            // and let SmartShelfEngine rerank by centroid affinity. When the Phase-2 ranker is enabled AND
+            // the user has crossed FullModelMinWatched, hand the trained re-ranker down: RerankPipeline then
+            // orders candidates by the model's P(engage) instead of the heuristic (falling back gracefully
+            // if no model is trained yet).
+            var (profile, tables) = _profileBuilder.Build(userId);
+            if (profile.IsCold && profile.TopCollections.Count == 0)
+            {
+                result = new RuleBasedShelves(items, feedback).Build();
+            }
+            else
+            {
+                var fullMin = EffectiveInt(cfg?.FullModelMinWatched, Tuning.FullModelMinWatched, 1, 1000);
+                ITier2Ranker? activeRanker = cfg?.EnableTier2Ranker is true && watchedCount >= fullMin ? _ranker : null;
+
+                var centroid = GetCentroid(userId);
+                var affinity = Affinities(centroid, items);
+                var maxShelves = EffectiveInt(cfg?.MaxShelves, 10, 1, 10);
+                result = new SmartShelfEngine(items, profile, tables, affinity, _library, _logger, feedback: feedback, ranker: activeRanker, userId: userId).Build(maxShelves);
+            }
         }
 
-        var fullMin = EffectiveInt(cfg?.FullModelMinWatched, Tuning.FullModelMinWatched, 1, 1000);
-        ITier2Ranker? activeRanker = cfg?.EnableTier2Ranker is true && watchedCount >= fullMin ? _ranker : null;
+        return PostFilterShelves(result, userId, limit, unwatched, type);
+    }
 
-        var centroid = GetCentroid(userId);
-        var affinity = Affinities(centroid, items);
-        var maxShelves = EffectiveInt(cfg?.MaxShelves, 10, 1, 10);
-        return new SmartShelfEngine(items, profile, tables, affinity, _library, _logger, feedback: feedback, ranker: activeRanker, userId: userId).Build(maxShelves);
+    /// <summary>
+    /// Optional request-time shaping of already-built shelves: an item-type filter, an unwatched
+    /// filter (drops items the user has played), and a per-shelf item cap. Shelves that empty out
+    /// are dropped. This is a coarse trim applied AFTER the diversity/ordering pipeline, so prefer
+    /// server config for structural control and reserve these for one-off client needs.
+    /// </summary>
+    private List<ShelfDto> PostFilterShelves(List<ShelfDto> shelves, Guid userId, int? limit, bool unwatched, string? type)
+    {
+        if (!limit.HasValue && !unwatched && string.IsNullOrWhiteSpace(type))
+        {
+            return shelves;
+        }
+
+        var played = unwatched
+            ? _store.GetInteractionsForUser(userId).Where(i => i.Played).Select(i => i.ItemId).ToHashSet()
+            : null;
+        var perShelf = limit.HasValue ? Math.Clamp(limit.Value, 1, 100) : (int?)null;
+        var hasType = !string.IsNullOrWhiteSpace(type);
+
+        var result = new List<ShelfDto>(shelves.Count);
+        foreach (var s in shelves)
+        {
+            IEnumerable<ShelfItemDto> filtered = s.Items;
+            if (hasType)
+            {
+                filtered = filtered.Where(i => string.Equals(i.Type, type, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (played is { Count: > 0 })
+            {
+                filtered = filtered.Where(i => !played.Contains(i.Id));
+            }
+
+            if (perShelf.HasValue)
+            {
+                filtered = filtered.Take(perShelf.Value);
+            }
+
+            var list = filtered.ToList();
+            if (list.Count > 0)
+            {
+                result.Add(s with { Items = list });
+            }
+        }
+
+        return result;
     }
 
     private static bool IsDisabled
@@ -148,6 +278,26 @@ public sealed class RecommendationService
             _embeddings.IsReady,
             FormatTicks(_store.GetMeta("last_full_reindex")),
             ModelId: _store.GetMeta("model_id"));
+    }
+
+    /// <summary>
+    /// Non-admin readiness probe. Same engine state as <see cref="Status"/> but without the fields
+    /// (model id, last reindex) a regular client doesn't need, and served to ANY authenticated user.
+    /// <see cref="PingDto.Ready"/> is true only when the plugin is enabled, embeddings are loaded,
+    /// and at least one item is indexed.
+    /// </summary>
+    public PingDto Ping()
+    {
+        var enabled = Plugin.Instance?.Configuration is { } c && c.EnablePlugin && c.EnableIndexing;
+        var embeddingsReady = _embeddings.IsReady;
+        var itemCount = _store.ItemCount;
+        // Ready = the engine can serve recommendations right now (plugin enabled and indexed items are
+        // present, so shelves/similar/recommendations work from the cached vectors). EmbeddingsReady is
+        // reported separately and intentionally NOT part of Ready: it only flips true once the ONNX
+        // session is lazily loaded (on the first embed), so it can be false right after a restart even
+        // though serving already works. It tells the client whether NEW items can be embedded/reindexed.
+        var ready = enabled && itemCount > 0;
+        return new PingDto(enabled, embeddingsReady, itemCount, ready);
     }
 
     private Func<IndexedItem, bool>? BuildPredicate(string? type, bool unwatched, Guid? userId, string? collection)
