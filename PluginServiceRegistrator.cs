@@ -38,6 +38,9 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddHostedService<IndexWorker>();
         serviceCollection.AddHostedService<LibraryEventService>();
         serviceCollection.AddHostedService<UserDataService>();
+        // Eagerly loads the ONNX session at startup so /Ping's EmbeddingsReady is accurate (the
+        // session is otherwise lazy and may never init between restarts on a stable library).
+        serviceCollection.AddHostedService<EmbeddingWarmupService>();
 
         // Scheduled tasks (Dashboard → Scheduled Tasks). Discovered as IEnumerable<IScheduledTask>.
         serviceCollection.AddSingleton<MediaBrowser.Model.Tasks.IScheduledTask, ScheduledTasks.FullReindexTask>();
