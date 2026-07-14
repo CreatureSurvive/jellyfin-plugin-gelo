@@ -1,0 +1,11 @@
+[
+  {
+    "guid": "27d91ff0-2eba-4112-9a58-823fe08db004",
+    "name": "Gelo Recommendations",
+    "description": "Semantic, context-aware home shelves and sub-ms item-to-item recommendations.",
+    "overview": "Two-tier recommendation engine: MiniLM embeddings + SIMD vector store + a per-user ML.NET ranker.",
+    "owner": "Dana Buehre",
+    "category": "MoviesAndShows",
+    "versions": []
+  }
+]

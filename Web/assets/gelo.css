@@ -1,0 +1,47 @@
+/* SPDX-FileCopyrightText: 2026 Dana Buehre
+   SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* Gelo home + detail rails. Cards + shelves are built from jellyfin-web's OWN markup: the real
+   cardBuilder.getCardsHtml() (reached via the webpack runtime) plus the native .verticalSection /
+   .sectionTitleContainer.sectionTitleContainer-cards.padded-left / is="emby-scroller" /
+   .itemsContainer.scrollSlider tree. So card radius, aspect, per-screen width, shadow, insets,
+   hover/play overlays AND theming all come from jellyfin-web's own stylesheet and match the builtin
+   home shelves exactly. Only the few things native CSS has no public class for live here (plus a
+   pre-upgrade flex safety net and the fallback-card overlays used only if cardBuilder is unreachable). */
+
+.gelo-host { margin: 1.7em 0; }
+
+.gelo-host.gelo-loading::before {
+  content: "Loading recommendations…";
+  display: block;
+  padding: .5em 3.4% .2em;
+  color: rgba(255, 255, 255, .5);
+  font-size: .82em;
+}
+
+/* Reason badge beside a shelf title (e.g. "Similar:Favorite"). */
+.gelo-reason {
+  font-size: .72em; font-weight: 500; color: rgba(255, 255, 255, .42);
+  white-space: nowrap; margin-left: .55em;
+}
+
+/* Pre-upgrade safety: lay the scrollSlider out as a flex row before the emby-scroller web component
+   upgrades our injected node. Native covers this once upgraded; harmless either way. */
+.gelo-host .scrollSlider { display: flex; flex-wrap: nowrap; }
+
+/* FALLBACK cards only (used if the native cardBuilder can't be reached). Native cards need none of
+   this — they bring their own overlays via cardBuilder. */
+.gelo-host .card { text-decoration: none; color: inherit; }
+.gelo-played {
+  position: absolute; top: .3em; right: .3em; color: #4caf50; font-size: 1.45em;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .75); z-index: 2;
+}
+.gelo-progress {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 4px;
+  background: rgba(0, 0, 0, .5); z-index: 2;
+}
+.gelo-progress > span { display: block; height: 100%; background: #00a4dc; }
+.gelo-card-ph {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  text-align: center; padding: .6em; font-size: .85em; color: rgba(255, 255, 255, .6);
+}

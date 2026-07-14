@@ -1,0 +1,495 @@
+<!--
+  jellyfin-web loads plugin config pages as a "view". It only re-executes the inline script when the
+  page HTML carries a data-role="page" attribute (then jQuery re-runs it); otherwise the HTML is set via
+  raw innerHTML which drops scripts and the page renders blank. The script tag below is wrapped in a
+  comment pair that the loader un-escapes before re-execution.
+
+  This page intentionally defines NO custom stylesheet and uses ONLY jellyfin-web's own dashboard
+  classes and emby custom controls (is="emby-checkbox" / is="emby-input" / is="emby-select" /
+  is="emby-button") inside the standard "page type-interior pluginConfigurationPage" wrapper plus
+  data-role="content" > .content-primary. That mirrors how the other installed plugins (Trakt, Reports,
+  Intro Skipper) build their working, themeable, mobile-friendly settings pages, so layout, spacing,
+  touch handling and theming all come from the dashboard for free. The only inline styles here are on
+  individual transient nodes (the floating toast, the unsaved-changes label, status pills) and never
+  touch page layout or pointer-events.
+-->
+<div id="geloConfigurationPage" data-role="page"
+     class="page type-interior pluginConfigurationPage geloConfigurationPage"
+     data-title="Gelo Recommendations">
+    <div data-role="content">
+        <div class="content-primary">
+
+            <h1>Gelo Recommendations</h1>
+            <p class="fieldDescription" style="max-width:760px">Semantic, context-aware recommendations for
+                Jellyfin: home shelves and sub-ms item-to-item suggestions tuned from your watch history.
+                Defaults are sensible for most libraries — change only what you want to diverge. Relevance
+                weights should sum to ~1.0.</p>
+
+            <div id="gelo-loading" class="fieldDescription">Loading configuration…</div>
+            <div id="gelo-content" style="display:none">
+
+                <fieldset class="verticalSection">
+                    <legend>Status</legend>
+                    <div id="gelo-status"></div>
+                    <div style="margin-top:.6em;display:flex;gap:.5em;flex-wrap:wrap">
+                        <button is="emby-button" type="button" class="raised block" data-gelo-action="refresh">Refresh status</button>
+                        <button is="emby-button" type="button" class="raised block" data-gelo-action="reindex">Trigger full reindex</button>
+                        <button is="emby-button" type="button" class="raised block" data-gelo-action="retrain">Trigger model retrain</button>
+                    </div>
+                    <div class="fieldDescription" style="margin-top:.6em">Full reindex re-embeds the whole library (~minutes). Retrain rebuilds every user's taste vector so weight/decay changes take effect immediately. Both also run on their own schedules.</div>
+                </fieldset>
+
+                <fieldset class="verticalSection">
+                    <legend>Master switches</legend>
+
+                    <div class="checkboxContainer">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="enablePlugin" name="enablePlugin" />
+                            <span>Plugin enabled</span>
+                        </label>
+                    </div>
+
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="enableIndexing" name="enableIndexing" />
+                            <span>Enable indexing / native engine</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Embeddings, SQLite, and event hooks. Off = safe mode.</div>
+                    </div>
+
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="enableTier2Ranker" name="enableTier2Ranker" />
+                            <span>Enable Phase-2 trained ranker</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Trains a per-user logistic ranker on the daily retrain (or via “Trigger model retrain”). Needs ≥ “Min watched → full model” items; shelves fall back to the heuristic until a model is trained.</div>
+                    </div>
+
+                    <div class="checkboxContainer">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="enableDiversity" name="enableDiversity" />
+                            <span>Shelf diversity soft-caps</span>
+                        </label>
+                    </div>
+
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="enableExploration" name="enableExploration" />
+                            <span>Inject exploration items</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Steals lower-ranked items into page-0 shelves for discovery.</div>
+                    </div>
+
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="enableFreshnessBoost" name="enableFreshnessBoost" />
+                            <span>Boost recently-added items</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">+0.08·(1 − age/30d) for media added in the last 30 days.</div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="verticalSection">
+                    <legend>Web UI</legend>
+
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input is="emby-checkbox" type="checkbox" id="enableWebUI" name="enableWebUI" />
+                            <span>Inject Gelo into jellyfin-web</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Recommendation rails on the home screen + "More Like This" on detail pages. Takes effect on the next page load (no restart).</div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="webUIShelfCount" name="webUIShelfCount"
+                               label="Home shelves (1–10)" min="1" max="10" step="1" />
+                        <div class="fieldDescription">How many Gelo recommendation rails to render on home.</div>
+                    </div>
+
+                    <div class="selectContainer">
+                        <select is="emby-select" id="webUIPosition" name="webUIPosition" label="Home position">
+                            <option value="afterFirst">After first native shelf</option>
+                            <option value="top">Top of home</option>
+                            <option value="bottom">Bottom of home</option>
+                        </select>
+                        <div class="fieldDescription">Where the Gelo rails sit relative to the native home sections.</div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="verticalSection">
+                    <legend>Relevance scoring</legend>
+
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="weightCompletion" name="weightCompletion"
+                               label="Completion weight" min="0" max="1" step="0.05" />
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="weightPlayCount" name="weightPlayCount"
+                               label="Play-count weight" min="0" max="1" step="0.05" />
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="weightFavorite" name="weightFavorite"
+                               label="Favorite weight" min="0" max="1" step="0.05" />
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="weightDwell" name="weightDwell"
+                               label="Dwell weight" min="0" max="1" step="0.05" />
+                    </div>
+
+                    <div class="fieldDescription" style="margin:.4em 0 .8em">Weight sum: <span id="gelo-weight-sum" style="font-weight:600">—</span></div>
+                    <div class="fieldDescription" style="margin-bottom:1em">relevanceScore = (Wc·completion + Wp·playCount + Wf·favorite + Wd·dwell)·decay</div>
+
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="decayHalfLifeDays" name="decayHalfLifeDays"
+                               label="Decay half-life (days)" min="1" step="1" />
+                        <div class="fieldDescription">Exponential recency decay (half-life in days; default 90). Floor 0.01.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="engagedCompletionThreshold" name="engagedCompletionThreshold"
+                               label="Engaged threshold (0–1)" min="0" max="1" step="0.01" />
+                        <div class="fieldDescription">completionPct above which an item enters the taste profile.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="watchedCompletionThreshold" name="watchedCompletionThreshold"
+                               label="Watched threshold (0–1)" min="0" max="1" step="0.01" />
+                        <div class="fieldDescription">completionPct that counts as "watched" for phase selection.</div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="verticalSection">
+                    <legend>Phase gating &amp; shelves</legend>
+
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="contentSimilarityMinWatched" name="contentSimilarityMinWatched"
+                               label="Min watched → smart shelves" min="0" step="1" />
+                        <div class="fieldDescription">Below this, the user gets cold-start rule-based shelves.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="fullModelMinWatched" name="fullModelMinWatched"
+                               label="Min watched → full model" min="0" step="1" />
+                        <div class="fieldDescription">Minimum watched items before the trained ranker (instead of the heuristic) ranks shelves.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="maxShelves" name="maxShelves"
+                               label="Max shelves (1–10)" min="1" max="10" step="1" />
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="itemsPerShelf" name="itemsPerShelf"
+                               label="Items per shelf" min="1" max="50" step="1" />
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="similarLimit" name="similarLimit"
+                               label="“More Like This” limit" min="1" max="100" step="1" />
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="quickFixMaxMinutes" name="quickFixMaxMinutes"
+                               label="Quick-fix max minutes" min="1" step="1" />
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="deepDiveMinMinutes" name="deepDiveMinMinutes"
+                               label="Deep-dive min minutes" min="1" step="1" />
+                    </div>
+                </fieldset>
+
+                <fieldset class="verticalSection">
+                    <legend>Engine &amp; embedding</legend>
+
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="executionProviderOrder" name="executionProviderOrder"
+                               label="ONNX execution providers" />
+                        <div class="fieldDescription">Comma-separated, evaluated in order. This host is Intel-only (CPU).</div>
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="maxEmbedsPerSecond" name="maxEmbedsPerSecond"
+                               label="Max embeds / second" min="1" step="1" />
+                        <div class="fieldDescription">Background worker throttle to protect CPU.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="batchSize" name="batchSize"
+                               label="Reindex batch size" min="1" step="1" />
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="embeddingDim" name="embeddingDim"
+                               label="Embedding dimension" min="1" step="1" disabled />
+                        <div class="fieldDescription">Must match the bundled MiniLM model (384).</div>
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="maxSequenceLength" name="maxSequenceLength"
+                               label="Max sequence length" min="1" step="1" />
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="modelPath" name="modelPath"
+                               label="Model path override (optional)" placeholder="bundled all-MiniLM-L6-v2" />
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="vocabPath" name="vocabPath"
+                               label="Vocab path override (optional)" placeholder="bundled vocab.txt" />
+                    </div>
+                </fieldset>
+
+                <div style="margin-top:1.4em;display:flex;gap:.6em;align-items:center;justify-content:flex-end;flex-wrap:wrap">
+                    <span id="gelo-dirty" class="fieldDescription" style="display:none;color:#ffb74d;font-weight:600">Unsaved changes</span>
+                    <button is="emby-button" type="button" class="raised" data-gelo-action="reset">Reset</button>
+                    <button is="emby-button" type="button" class="raised button-submit" data-gelo-action="save">Save</button>
+                </div>
+
+            </div>
+
+            <div id="gelo-toast"
+                 style="position:fixed;right:22px;bottom:22px;padding:11px 16px;border-radius:8px;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.4);opacity:0;transform:translateY(10px);pointer-events:none;transition:opacity .2s,transform .2s;z-index:9999;max-width:360px"></div>
+
+<!--<script>
+(function () {
+  "use strict";
+  var PLUGIN_ID = "27d91ff0-2eba-4112-9a58-823fe08db004";
+  var REINDEX_KEY = "GeloFullReindex";
+  var RETRAIN_KEY = "GeloRetrain";
+
+  // id = DOM element id; k = config key in PASCALCASE (matches GeloPluginConfiguration, which is what
+  // Jellyfin serializes/round-trips); t = b/n/s (bool/number/string); w marks the four relevance weights
+  // for the live sum. Reads are case-insensitive (form fills whether the API returns PascalCase or
+  // camelCase); writes use the original server casing (preserving server-only fields).
+  var FIELDS = [
+    { id: "enablePlugin", k: "EnablePlugin", t: "b" },
+    { id: "enableIndexing", k: "EnableIndexing", t: "b" },
+    { id: "enableTier2Ranker", k: "EnableTier2Ranker", t: "b" },
+    { id: "enableDiversity", k: "EnableDiversity", t: "b" },
+    { id: "enableExploration", k: "EnableExploration", t: "b" },
+    { id: "enableFreshnessBoost", k: "EnableFreshnessBoost", t: "b" },
+    { id: "enableWebUI", k: "EnableWebUI", t: "b" },
+    { id: "weightCompletion", k: "WeightCompletion", t: "n", w: true },
+    { id: "weightPlayCount", k: "WeightPlayCount", t: "n", w: true },
+    { id: "weightFavorite", k: "WeightFavorite", t: "n", w: true },
+    { id: "weightDwell", k: "WeightDwell", t: "n", w: true },
+    { id: "decayHalfLifeDays", k: "DecayHalfLifeDays", t: "n" },
+    { id: "engagedCompletionThreshold", k: "EngagedCompletionThreshold", t: "n" },
+    { id: "watchedCompletionThreshold", k: "WatchedCompletionThreshold", t: "n" },
+    { id: "contentSimilarityMinWatched", k: "ContentSimilarityMinWatched", t: "n" },
+    { id: "fullModelMinWatched", k: "FullModelMinWatched", t: "n" },
+    { id: "maxShelves", k: "MaxShelves", t: "n" },
+    { id: "itemsPerShelf", k: "ItemsPerShelf", t: "n" },
+    { id: "similarLimit", k: "SimilarLimit", t: "n" },
+    { id: "quickFixMaxMinutes", k: "QuickFixMaxMinutes", t: "n" },
+    { id: "deepDiveMinMinutes", k: "DeepDiveMinMinutes", t: "n" },
+    { id: "maxEmbedsPerSecond", k: "MaxEmbedsPerSecond", t: "n" },
+    { id: "batchSize", k: "BatchSize", t: "n" },
+    { id: "maxSequenceLength", k: "MaxSequenceLength", t: "n" },
+    { id: "webUIShelfCount", k: "WebUIShelfCount", t: "n" },
+    { id: "executionProviderOrder", k: "ExecutionProviderOrder", t: "s" },
+    { id: "modelPath", k: "ModelPath", t: "s" },
+    { id: "vocabPath", k: "VocabPath", t: "s" },
+    { id: "webUIPosition", k: "WebUIPosition", t: "s" }
+  ];
+  var fieldMap = {};
+  FIELDS.forEach(function (F) { fieldMap[F.id] = F; });
+
+  // ApiClient is global on the main window (config pages load inline as a view, not in an iframe).
+  function api() {
+    return window.ApiClient
+      || (window.parent && window.parent !== window && window.parent.ApiClient)
+      || (window.ConnectionManager && window.ConnectionManager.currentApiClient && window.ConnectionManager.currentApiClient())
+      || null;
+  }
+  function whenReady(cb) {
+    var tries = 0;
+    (function check() {
+      if (api()) { cb(); return; }
+      if (++tries > 30) { cb(); return; } // ~3s; load() surfaces a clear message if still missing
+      setTimeout(check, 100);
+    })();
+  }
+  function ajax(opts) {
+    var a = api();
+    if (!a) return Promise.reject(new Error("ApiClient not available — open this page from the Jellyfin dashboard."));
+    return a.ajax(Object.assign({ dataType: "json" }, opts));
+  }
+  function getConfig() {
+    var a = api();
+    if (typeof a.getPluginConfiguration === "function") return a.getPluginConfiguration(PLUGIN_ID);
+    return ajax({ type: "GET", url: a.getUrl("Plugins/" + PLUGIN_ID + "/Configuration") });
+  }
+  function saveConfig(cfg) {
+    var a = api();
+    if (typeof a.updatePluginConfiguration === "function") return a.updatePluginConfiguration(PLUGIN_ID, cfg);
+    return ajax({ type: "POST", url: a.getUrl("Plugins/" + PLUGIN_ID + "/Configuration"),
+      data: JSON.stringify(cfg), contentType: "application/json",
+      headers: { "Content-Type": "application/json" }, dataType: null });
+  }
+  function getStatus() { return ajax({ type: "GET", url: api().getUrl("CustomRecommendations/Status") }); }
+  function getTasks() { return ajax({ type: "GET", url: api().getUrl("ScheduledTasks") }); }
+  function startTask(id) { return ajax({ type: "POST", url: api().getUrl("ScheduledTasks/Running/" + id), dataType: null }); }
+
+  function el(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  var lastConfig = null;
+
+  function populate(cfg) {
+    lastConfig = cfg || {};
+    var lower = {};
+    Object.keys(lastConfig).forEach(function (kk) { lower[kk.toLowerCase()] = lastConfig[kk]; });
+    FIELDS.forEach(function (F) {
+      var node = el(F.id); if (!node) return;
+      var lk = F.k.toLowerCase();
+      if (!(lk in lower)) return;
+      var v = lower[lk];
+      if (F.t === "b") node.checked = !!v;
+      else if (v != null) node.value = v;
+    });
+    var dim = el("embeddingDim");
+    if (dim && lower["embeddingdim"] != null) dim.value = lower["embeddingdim"];
+    updateWeightSum();
+    markClean();
+  }
+
+  function gather() {
+    var cfg = JSON.parse(JSON.stringify(lastConfig || {}));
+    var origKey = {};
+    Object.keys(cfg).forEach(function (kk) { origKey[kk.toLowerCase()] = kk; });
+    FIELDS.forEach(function (F) {
+      var node = el(F.id); if (!node) return;
+      var key = origKey[F.k.toLowerCase()] || F.k;
+      if (F.t === "b") cfg[key] = !!node.checked;
+      else if (F.t === "n") { if (node.value !== "") cfg[key] = Number(node.value); }
+      else cfg[key] = node.value;
+    });
+    return cfg;
+  }
+
+  function updateWeightSum() {
+    var sum = 0, ok = true;
+    FIELDS.forEach(function (F) {
+      if (!F.w) return;
+      var node = el(F.id); if (!node) return;
+      var v = parseFloat(node.value);
+      if (isNaN(v)) { ok = false; } else { sum += v; }
+    });
+    var node = el("gelo-weight-sum"); if (!node) return;
+    if (!ok) { node.textContent = "enter all four weights"; node.style.color = "#ffb74d"; return; }
+    node.textContent = sum.toFixed(2) + (Math.abs(sum - 1) < 0.001 ? "  (balanced)" : "");
+    node.style.color = (sum >= 0.9 && sum <= 1.1) ? "#4caf50" : "#ffb74d";
+  }
+
+  function markDirty() { var n = el("gelo-dirty"); if (n) n.style.display = "inline"; }
+  function markClean() { var n = el("gelo-dirty"); if (n) n.style.display = "none"; }
+
+  function toast(msg, isErr) {
+    var t = el("gelo-toast"); if (!t) return;
+    t.textContent = msg;
+    t.style.background = isErr ? "#3a1b1d" : "#243b28";
+    t.style.color = isErr ? "#ef5350" : "#4caf50";
+    t.style.border = "1px solid " + (isErr ? "#5e272a" : "#2e5236");
+    t.style.opacity = "1"; t.style.transform = "translateY(0)"; t.style.pointerEvents = "auto";
+    clearTimeout(t._timer);
+    t._timer = setTimeout(function () {
+      t.style.opacity = "0"; t.style.transform = "translateY(10px)"; t.style.pointerEvents = "none";
+    }, 3200);
+  }
+
+  function pill(text, cls) {
+    var bg = cls === "ok" ? "#1b3a20" : "#3a2f18", fg = cls === "ok" ? "#4caf50" : "#ffb74d";
+    return '<span style="display:inline-block;padding:1px 9px;border-radius:999px;font-size:.85em;font-weight:600;background:' + bg + ';color:' + fg + '">' + esc(text) + '</span>';
+  }
+  function stat(label, valueHtml) {
+    return '<div style="margin:0 0 .6em"><div class="fieldDescription" style="text-transform:uppercase;letter-spacing:.04em">' + esc(label) + '</div>' +
+           '<div style="font-size:1.1em;font-weight:600;margin-top:2px">' + valueHtml + '</div></div>';
+  }
+  function renderStatus(status, tasks) {
+    var box = el("gelo-status"); if (!box) return;
+    var ready = status && status.embeddingsReady;
+    var html = '';
+    html += stat("Items indexed", status ? esc(String(status.itemCount)) : "—");
+    html += stat("Dimension", status ? esc(String(status.dimension)) : "—");
+    html += stat("Engine", ready ? pill("ready", "ok") : pill("indexing", "warn"));
+    html += stat("Model", (status && status.modelId) ? esc(status.modelId) : "—");
+    html += stat("Last reindex", (status && status.lastFullReindex) ? esc(status.lastFullReindex) : "never");
+    if (tasks) { html += taskStat(tasks, REINDEX_KEY, "Reindex"); html += taskStat(tasks, RETRAIN_KEY, "Retrain"); }
+    box.innerHTML = html;
+  }
+  function taskStat(tasks, key, label) {
+    var t = (tasks || []).filter(function (x) { return x.Key === key; })[0];
+    if (!t) return '';
+    var state = t.State || "Idle";
+    var cls = state === "Running" ? "warn" : "ok";
+    var prog = (t.CurrentProgressPercentage != null) ? " " + Math.round(t.CurrentProgressPercentage) + "%" : "";
+    var last = t.LastEndTime ? " · last " + new Date(t.LastEndTime).toLocaleString() : "";
+    return stat(label + " task", pill(state, cls) + esc(prog + last));
+  }
+  function loadStatus() {
+    getStatus().then(function (s) {
+      getTasks().then(function (tasks) { renderStatus(s, tasks); }).catch(function () { renderStatus(s, null); });
+    }).catch(function (e) {
+      var box = el("gelo-status");
+      if (box) box.innerHTML = stat("Status", '<span style="color:#ef5350">' + esc(e.message || String(e)) + '</span>');
+    });
+  }
+  function trigger(key, label) {
+    getTasks().then(function (tasks) {
+      var t = (tasks || []).filter(function (x) { return x.Key === key; })[0];
+      if (!t) { toast("Task not found: " + label, true); return; }
+      startTask(t.Id).then(function () { toast(label + " started."); setTimeout(loadStatus, 600); })
+        .catch(function (e) { toast("Failed to start " + label + ": " + (e.message || e), true); });
+    }).catch(function (e) { toast("Cannot reach scheduled tasks: " + (e.message || e), true); });
+  }
+
+  function save() {
+    saveConfig(gather()).then(function () {
+      lastConfig = gather();
+      markClean();
+      toast("Saved. Some changes apply on next reindex/retrain.");
+    }).catch(function (e) { toast("Save failed: " + (e.message || e), true); });
+  }
+  function load() {
+    var loading = el("gelo-loading"), content = el("gelo-content");
+    if (!api()) {
+      if (loading) loading.textContent = "ApiClient not available — open this page from the Jellyfin dashboard.";
+      return;
+    }
+    getConfig().then(function (cfg) {
+      if (loading) loading.style.display = "none";
+      if (content) content.style.display = "block";
+      populate(cfg);
+      loadStatus();
+    }).catch(function (e) {
+      if (loading) loading.textContent = "Failed to load configuration: " + (e.message || e);
+    });
+  }
+
+  // Event handling is delegated to document so it is immune to view-loader timing (the legacy loader can
+  // re-run this script during view construction before the nodes are connected). These listeners catch
+  // change/input/click from the controls whenever they fire, regardless of when they were inserted.
+  function onFieldEvent(e) {
+    var t = e.target;
+    if (!t || !t.id) return;
+    var F = fieldMap[t.id];
+    if (!F) return;
+    if (F.w) updateWeightSum();
+    markDirty();
+  }
+  document.addEventListener("change", onFieldEvent);
+  document.addEventListener("input", onFieldEvent);
+
+  var ACTIONS = {
+    save: save,
+    reset: load,
+    refresh: loadStatus,
+    reindex: function () { trigger(REINDEX_KEY, "Full reindex"); },
+    retrain: function () { trigger(RETRAIN_KEY, "Model retrain"); }
+  };
+  document.addEventListener("click", function (e) {
+    var n = e.target.closest ? e.target.closest("[data-gelo-action]") : null;
+    if (!n) return;
+    var fn = ACTIONS[n.getAttribute("data-gelo-action")];
+    if (fn) { e.preventDefault(); fn(); }
+  });
+
+  whenReady(load);
+})();
+</script>-->
+        </div>
+    </div>
+</div>

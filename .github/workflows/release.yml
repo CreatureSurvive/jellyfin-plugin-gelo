@@ -1,0 +1,101 @@
+name: Release
+
+# Publishes the plugin, builds a flat release ZIP + SHA-256, creates a GitHub release,
+# and appends the new version (sourceUrl + checksum) to manifest.json on the default branch —
+# which is what users point Jellyfin at to install / auto-update the plugin.
+#
+# Triggers on a pushed tag named v<version> (e.g. v1.0.0.0) or a manual workflow_dispatch.
+# Requires the repo's Actions → General → Workflow permissions to be "Read and write" so the
+# GITHUB_TOKEN can create the release and push the manifest commit.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, e.g. v1.0.0.0'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Publish
+        run: dotnet publish -c Release -r linux-x64 -o ./publish
+
+      - name: Stage + ZIP + checksum
+        id: pkg
+        run: |
+          ./package.sh --zip
+          VERSION="$(grep -E '^version:' build.yaml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          TARGET="$(grep -E '^targetAbi:' build.yaml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          ZIP="dist/gelo-recommendations_${VERSION}.zip"
+          test -f "$ZIP"
+          {
+            echo "version=${VERSION}"
+            echo "target_abi=${TARGET}"
+            echo "zip=${ZIP}"
+            echo "zip_name=$(basename "$ZIP")"
+            echo "sha256=$(cut -d' ' -f1 "${ZIP}.sha256")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          [ -z "$TAG" ] && TAG="${GITHUB_REF_NAME}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract changelog for this version
+        run: |
+          awk -v v="${{ steps.pkg.outputs.version }}" '
+            $0 ~ "^## \\[" v "\\]" {p=1; next}
+            /^## \[/ {if(p) exit}
+            p {print}
+          ' CHANGELOG.md > /tmp/changelog.txt
+          [ -s /tmp/changelog.txt ] || echo "Release ${{ steps.pkg.outputs.version }}" > /tmp/changelog.txt
+
+      - name: Create release + upload assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          ZIP="${{ steps.pkg.outputs.zip }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP" "$ZIP.sha256" --clobber
+          else
+            gh release create "$TAG" "$ZIP" "$ZIP.sha256" \
+              --title "$TAG" --notes-file /tmp/changelog.txt
+          fi
+
+      - name: Update manifest.json on the default branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DEFAULT="${{ github.event.repository.default_branch }}"
+          git checkout "$DEFAULT"
+          URL="https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/${{ steps.pkg.outputs.zip_name }}"
+          ./scripts/update-manifest.sh \
+            "${{ steps.pkg.outputs.version }}" \
+            "${{ steps.pkg.outputs.target_abi }}" \
+            "$URL" \
+            "${{ steps.pkg.outputs.sha256 }}" \
+            /tmp/changelog.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          git commit -m "chore: update plugin manifest for ${{ steps.pkg.outputs.version }}" || echo "no manifest changes"
+          git push origin "$DEFAULT"

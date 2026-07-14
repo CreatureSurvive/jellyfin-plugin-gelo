@@ -1,0 +1,12 @@
+bin/
+obj/
+*.user
+.vs/
+.idea/
+# Note: Assets/*.onnx is tracked via Git LFS (see .gitattributes), so it is NOT ignored.
+publish/
+dist/
+*.log
+
+# Local debug harnesses (native-loading repros) — not part of the shipped plugin.
+test/

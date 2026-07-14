@@ -1,0 +1,91 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>Jellyfin.Plugin.Gelo</RootNamespace>
+    <AssemblyName>Jellyfin.Plugin.Gelo</AssemblyName>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <Version>1.0.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <TreatWarningsAsDependencies>false</TreatWarningsAsDependencies>
+    <!-- Plugin is framework-dependent (Jellyfin supplies net9.0); copy our own deps locally,
+         and publish with a RID so per-platform native .so/.dll are pulled into runtimes/<rid>/native. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+
+  <!-- ASP.NET Core types (IFileProvider/IFileInfo/StaticFileOptions/IApplicationBuilder/MVC controllers)
+       are provided by the Jellyfin host's shared framework. Reference them compile-only so the plugin
+       can implement the static-file provider swap and serve assets, without copying any runtime. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Jellyfin server assemblies: never copy the runtime — the server provides them.
+         Pin to the exact server patch version or the plugin loads as NotSupported. -->
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.11">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    <PackageReference Include="Jellyfin.Model" Version="10.11.11">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+
+    <!-- Tier 1: ONNX inference for all-MiniLM-L6-v2 (384-dim). ONNX is NOT provided by the host,
+         so it must be bundled (native + managed) with this plugin. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.27.1" />
+    <!-- Persistence. CRITICAL: Jellyfin CORE already ships Microsoft.Data.Sqlite + SQLitePCLRaw
+         (at /usr/lib/jellyfin/bin/) and registers the process-global SQLitePCLRaw provider at
+         startup. If we bundle our own copy, our duplicate provider init clashes with core's and
+         produces ip=0 segfaults on sqlite3 calls. ExcludeAssets=runtime makes us compile against
+         the ref assemblies but rely on the host's already-loaded copies at runtime (version match:
+         core = Microsoft.Data.Sqlite 9.0.0.0, SQLitePCLRaw 2.1.10.2445). -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    <!-- Phase 2: the trained logistic ranker. Microsoft.ML is the only NuGet id that ships MLContext /
+         IDataView / PredictionEngine / the LbfgsLogisticRegression trainer (Data + StandardTrainers are
+         assemblies inside it, not standalone packages). We ExcludeAssets=native to drop the LightGBM /
+         FastTree .so libs the meta-package bundles: we only ever use the pure-managed Lbfgs trainer, so
+         those natives would just bloat the deploy and risk the native-loader pain the ONNX tier needed
+         NativeProbing to solve. -->
+    <PackageReference Include="Microsoft.ML" Version="5.0.0">
+      <ExcludeAssets>native</ExcludeAssets>
+    </PackageReference>
+
+    <!-- Harmony (pure managed) for ONE surgical runtime patch: wrap the /web IFileProvider so we can
+         inject the Gelo client script into served index.html. We do NOT copy-local 0Harmony.dll: the
+         Jellyfin plugin loader globs every top-level *.dll into a collectible PluginLoadContext, which
+         clashes with the dependency resolver and throws FileLoadException 0x80131515. Instead we embed
+         the net9.0 build as a resource and load it into a dedicated non-collectible ALC at runtime,
+         driven entirely by reflection (no compile-time HarmonyLib reference). -->
+    <PackageReference Include="Lib.Harmony" Version="2.4.2">
+      <ExcludeAssets>all</ExcludeAssets>
+      <GeneratePathProperty>true</GeneratePathProperty>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Assets\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <!-- Dashboard configuration page, surfaced via IHasWebPages. Embedded so it ships inside the DLL. -->
+    <EmbeddedResource Include="Configuration\ConfigurationPage.html" />
+    <!-- Client assets injected into jellyfin-web, served by WebAssetController. -->
+    <EmbeddedResource Include="Web\assets\gelo.js" />
+    <EmbeddedResource Include="Web\assets\gelo.css" />
+    <!-- Harmony runtime, embedded (not copy-local) and reflection-loaded into a dedicated ALC.
+         LogicalName pins the manifest name so the loader can fetch it by a stable string. -->
+    <EmbeddedResource Include="$(PkgLib_Harmony)/lib/net9.0/0Harmony.dll">
+      <LogicalName>Jellyfin.Plugin.Gelo.Harmony</LogicalName>
+    </EmbeddedResource>
+    <!-- The standalone test harness is a separate project; keep it out of the plugin build. -->
+    <Compile Remove="test\**" />
+    <None Remove="test\**" />
+    <EmbeddedResource Remove="test\**" />
+  </ItemGroup>
+
+</Project>

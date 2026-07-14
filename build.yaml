@@ -1,0 +1,21 @@
+# jprm (jellyfin-plugin-repository-manager) manifest source.
+# A build script generates meta.json from this + the published DLL; if you later adopt the
+# jellyfin/jellyfin-repo GitHub Action, it consumes this file directly.
+---
+name: "Gelo Recommendations"
+guid: "27d91ff0-2eba-4112-9a58-823fe08db004"
+version: "1.0.0.0"
+targetAbi: "10.11.0.0"
+framework: "net9.0"
+overview: "Semantic, context-aware home shelves and sub-ms item-to-item recommendations."
+description: >
+  A two-tier recommendation engine for Jellyfin. Tier 1: all-MiniLM-L6-v2 semantic
+  embeddings with a SIMD vector store, incremental indexing off library/user-data events,
+  a More-Like-This API, and dynamic curation shelves. Tier 2 adds a per-user Microsoft.ML
+  trained ranker that orders shelves by learned engagement probability.
+category: "MoviesAndShows"
+owner: "Dana Buehre"
+artifacts:
+  - "Jellyfin.Plugin.Gelo.dll"
+changelog: >
+  Initial Phase 1 release.
