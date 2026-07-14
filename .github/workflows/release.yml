@@ -62,7 +62,7 @@ jobs:
       - name: Extract changelog for this version
         run: |
           awk -v v="${{ steps.pkg.outputs.version }}" '
-            $0 ~ "^## \\[" v "\\]" {p=1; next}
+            $1=="##" && $2=="["v"]" {p=1; next}
             /^## \[/ {if(p) exit}
             p {print}
           ' CHANGELOG.md > /tmp/changelog.txt
