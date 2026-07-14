@@ -54,9 +54,8 @@ Once a release exists, this is the recommended path — you get updates automati
 1. In Jellyfin, go to **Dashboard → Plugins → Repositories** and add a new repository with the
    manifest URL:
    ```
-   https://raw.githubusercontent.com/<owner>/<repo>/<default-branch>/manifest.json
+   https://raw.githubusercontent.com/CreatureSurvive/jellyfin-plugin-gelo/main/manifest.json
    ```
-   (substitute this project's actual GitHub owner, repo, and default branch).
 2. Under **Dashboard → Plugins → Catalog**, find **Gelo Recommendations** and click **Install**.
 3. Restart Jellyfin.
 4. On first run, trigger **Dashboard → Scheduled Tasks → "Full library reindex"** once to embed
