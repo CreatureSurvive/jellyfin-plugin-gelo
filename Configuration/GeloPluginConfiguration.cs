@@ -61,6 +61,10 @@ public class GeloPluginConfiguration : BasePluginConfiguration
 
     public int SimilarLimit { get; set; } = Tuning.DefaultSimilarLimit;
 
+    /// <summary>Shelves with fewer than this many items are dropped so the home isn't dotted with 1–2
+    /// item rails. Applied to engine output before any per-request caps (default 3).</summary>
+    public int MinItemsPerShelf { get; set; } = Tuning.MinItemsPerShelf;
+
     /// <summary>
     /// Default variety for the flat /Users/{id}/Recommendations list: "off" (deterministic top-N — the
     /// original behavior), "low" (genre/decade/creator spread), "medium" (spread + daily-rotating

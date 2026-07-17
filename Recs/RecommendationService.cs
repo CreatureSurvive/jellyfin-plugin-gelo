@@ -256,7 +256,33 @@ public sealed class RecommendationService
             }
         }
 
-        return PostFilterShelves(result, userId, limit, unwatched, type);
+        return PostFilterShelves(DropThinShelves(result), userId, limit, unwatched, type);
+    }
+
+    /// <summary>
+    /// Drop shelves that are too thin to be worth a rail. Applied to engine output (before any
+    /// per-request <c>limit</c>/<c>unwatched</c> shaping) so a client asking for a small per-shelf cap
+    /// isn't fought by this floor — the floor only screens out shelves the engine produced with 1–2
+    /// items. Default floor is 3; set to 1 to disable.
+    /// </summary>
+    private static List<ShelfDto> DropThinShelves(List<ShelfDto> shelves)
+    {
+        var min = EffectiveInt(Plugin.Instance?.Configuration?.MinItemsPerShelf, Tuning.MinItemsPerShelf, 1, 50);
+        if (min <= 1 || shelves.Count == 0)
+        {
+            return shelves;
+        }
+
+        var kept = new List<ShelfDto>(shelves.Count);
+        foreach (var s in shelves)
+        {
+            if (s.Items.Count >= min)
+            {
+                kept.Add(s);
+            }
+        }
+
+        return kept;
     }
 
     /// <summary>

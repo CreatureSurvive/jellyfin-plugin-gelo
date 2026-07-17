@@ -188,6 +188,11 @@
                                label="Items per shelf" min="1" max="50" step="1" />
                     </div>
                     <div class="inputContainer">
+                        <input is="emby-input" type="number" id="minItemsPerShelf" name="minItemsPerShelf"
+                               label="Min items per shelf" min="1" max="50" step="1" />
+                        <div class="fieldDescription">Shelves with fewer items than this are dropped (so the home isn't dotted with 1–2 item rails). Default 3; set to 1 to disable.</div>
+                    </div>
+                    <div class="inputContainer">
                         <input is="emby-input" type="number" id="similarLimit" name="similarLimit"
                                label="“More Like This” limit" min="1" max="100" step="1" />
                     </div>
@@ -278,6 +283,7 @@
     { id: "fullModelMinWatched", k: "FullModelMinWatched", t: "n" },
     { id: "maxShelves", k: "MaxShelves", t: "n" },
     { id: "itemsPerShelf", k: "ItemsPerShelf", t: "n" },
+    { id: "minItemsPerShelf", k: "MinItemsPerShelf", t: "n" },
     { id: "similarLimit", k: "SimilarLimit", t: "n" },
     { id: "quickFixMaxMinutes", k: "QuickFixMaxMinutes", t: "n" },
     { id: "deepDiveMinMinutes", k: "DeepDiveMinMinutes", t: "n" },

@@ -75,6 +75,10 @@ internal static class Tuning
     public const int DefaultItemsPerShelf = 12;
     public const int DefaultSimilarLimit = 12;
 
+    /// <summary>Minimum items for a shelf to be worth showing; thinner shelves are dropped so the home
+    /// isn't dotted with 1–2 item rails.</summary>
+    public const int MinItemsPerShelf = 3;
+
     /// <summary>Minimum engaged items before the trained ranker may run.</summary>
     public const int MinItemsForTraining = 10;
 
