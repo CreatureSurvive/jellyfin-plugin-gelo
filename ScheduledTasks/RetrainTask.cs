@@ -112,13 +112,14 @@ public sealed class RetrainTask : IScheduledTask
         progress.Report(100);
     }
 
-    /// <summary>Daily, 04:07 local — off-peak model refresh. Editable in the dashboard.</summary>
+    /// <summary>Daily, 03:00 local — off-peak model refresh (after the new-content scan/reindex have
+    /// picked up the day's additions). Editable in the dashboard.</summary>
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
     {
         yield return new TaskTriggerInfo
         {
             Type = TaskTriggerInfoType.DailyTrigger,
-            TimeOfDayTicks = new TimeSpan(4, 7, 0).Ticks,
+            TimeOfDayTicks = new TimeSpan(3, 0, 0).Ticks,
             MaxRuntimeTicks = TimeSpan.FromMinutes(30).Ticks
         };
     }

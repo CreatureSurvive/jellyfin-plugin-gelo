@@ -15,6 +15,9 @@ public abstract record IndexJob
     /// <summary>Signal a full-library reindex (e.g. after a model/template change).</summary>
     public sealed record EmbedAll : IndexJob;
 
+    /// <summary>Embed only items not yet in the store — a cheap new-content catch-up (vs. <see cref="EmbedAll"/>).</summary>
+    public sealed record EmbedMissing : IndexJob;
+
     /// <summary>Upsert a (user, item) interaction and recompute decay/relevance.</summary>
     public sealed record UpdateInteraction(Guid UserId, Guid ItemId) : IndexJob;
 

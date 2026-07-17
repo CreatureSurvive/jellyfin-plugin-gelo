@@ -29,8 +29,8 @@ locally with a bundled transformer model.
   favorites, and dwell, and deliberately ignores watchlist noise, so the taste profile tracks
   what you actually enjoy over time.
 - **Sub-millisecond similarity.** SIMD cosine scan over a warm in-memory vector cache.
-- **Incremental.** Indexes off live library/user-data events; a weekly catch-up re-embed keeps
-  new media covered.
+- **Incremental.** Indexes off live library/user-data events in real time, with a frequent
+  every-3h scan for anything missed and a weekly full re-embed catch-up.
 - **Tunable.** Every weight, decay, shelf count, and tier toggle is exposed in the dashboard,
   with sensible defaults — including a "For You" variety dial from precise top matches to
   daily-rotating discovery.
@@ -63,7 +63,7 @@ Once a release exists, this is the recommended path — you get updates automati
 2. Under **Dashboard → Plugins → Catalog**, find **Gelo Recommendations** and click **Install**.
 3. Restart Jellyfin.
 4. On first run, trigger **Dashboard → Scheduled Tasks → "Full library reindex"** once to embed
-   your library (this runs automatically weekly thereafter).
+   your library (new items are embedded automatically thereafter).
 
 ### From a release
 
@@ -72,7 +72,7 @@ Once a release exists, this is the recommended path — you get updates automati
 2. Restart Jellyfin.
 3. Open **Dashboard → Plugins → Gelo Recommendations** to confirm it loaded and to configure it.
 4. On first run, trigger **Dashboard → Scheduled Tasks → "Full library reindex"** once to embed
-   your library (this runs automatically weekly thereafter).
+   your library (new items are embedded automatically thereafter).
 
 ### From source
 
@@ -197,12 +197,17 @@ The web assets are served (anonymously, cache-busted) at `/CustomRecommendations
 
 ## Scheduled tasks
 
-Both live under **Dashboard → Scheduled Tasks**, category **Gelo Recommendations**, and are editable there.
+All live under **Dashboard → Scheduled Tasks**, category **Gelo Recommendations**, and are editable there.
 
 | Task | Default schedule | What it does |
 |---|---|---|
-| **Full library reindex** | Weekly, Sunday 03:30 | Re-embed every movie and show from scratch (catch-up). Max 1h. |
-| **Retrain user models** | Daily, 04:07 | Rebuild every user's taste centroid (so weight/decay changes apply instantly) and, when enabled, retrain the ranker. Max 30m. |
+| **Scan for new content** | Every 3 hours | Embed any movies/shows not yet in the store — catches items the real-time hooks missed (added while the server was down, bulk scans, pre-existing media). Cheap: only missing items. Max 30m. |
+| **Retrain user models** | Daily, 03:00 | Rebuild every user's taste centroid (so weight/decay changes apply instantly) and, when enabled, retrain the ranker. Max 30m. |
+| **Full library reindex** | Weekly, Sunday 02:00 | Re-embed the whole library from scratch — a heavier catch-up for after a model or text-template change. Max 1h. |
+
+New movies and series are embedded in **real time** as they're added (library event hooks). The every-3h
+scan is the safety net for anything those hooks miss; the weekly reindex re-embeds everything after a
+model or metadata-template change.
 
 ---
 
@@ -276,7 +281,7 @@ to match the platform's ONNX `.so`/`.dylib`/`.dll` names.
 - **`GET /Status` reports `EmbeddingsReady: false`.** The first reindex hasn't completed (or
   **Enable indexing** is off). Trigger the reindex task.
 - **Slow first boot / high CPU after install.** That's the initial library embed — it's throttled
-  by **Max embeds per second**. Raise it on faster hardware, or wait for the weekly reindex.
+  by **Max embeds per second**. Raise it on faster hardware, or wait for the next scheduled scan/reindex.
 - **Web client won't load at all.** Almost certainly a failed file-provider wrap. The plugin logs
   `[Gelo] web-patch:` lines on boot; disable **Enable web UI** (or the plugin) and restart to
   restore the vanilla client while investigating.

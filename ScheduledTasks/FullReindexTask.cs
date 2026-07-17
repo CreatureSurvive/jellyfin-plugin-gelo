@@ -51,13 +51,15 @@ public sealed class FullReindexTask : IScheduledTask
         return Task.CompletedTask;
     }
 
-    /// <summary>Weekly, Sunday 03:30 local — a low-impact catch-up pass. Editable in the dashboard.</summary>
+    /// <summary>Weekly, Sunday 02:00 local — a heavier catch-up that re-embeds after a model/template
+    /// change (day-to-day new content is handled by the every-3h "Scan for new content" task). Editable
+    /// in the dashboard.</summary>
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
     {
         yield return new TaskTriggerInfo
         {
             Type = TaskTriggerInfoType.WeeklyTrigger,
-            TimeOfDayTicks = new TimeSpan(3, 30, 0).Ticks,
+            TimeOfDayTicks = new TimeSpan(2, 0, 0).Ticks,
             DayOfWeek = DayOfWeek.Sunday,
             MaxRuntimeTicks = TimeSpan.FromHours(1).Ticks
         };

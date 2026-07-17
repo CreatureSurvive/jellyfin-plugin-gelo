@@ -132,6 +132,9 @@ public sealed class IndexWorker : BackgroundService
             case IndexJob.EmbedAll:
                 await EmbedAllAsync(ct).ConfigureAwait(false);
                 break;
+            case IndexJob.EmbedMissing:
+                await EmbedMissingAsync(ct).ConfigureAwait(false);
+                break;
             case IndexJob.UpdateInteraction(var uid, var iid):
                 ProcessInteraction(uid, iid);
                 break;
@@ -178,45 +181,9 @@ public sealed class IndexWorker : BackgroundService
 
     private async Task EmbedAllAsync(CancellationToken ct)
     {
-        var query = new InternalItemsQuery
-        {
-            IncludeItemTypes = new[] { BaseItemKind.Movie, BaseItemKind.Series },
-            Recursive = true,
-            IsVirtualItem = false
-        };
-        var items = _library.GetItemList(query);
+        var items = QueryEmbeddable();
         _logger.LogInformation("Full reindex starting for {Count} items.", items.Count);
-
-        var batchSize = Math.Max(1, Plugin.Instance?.Configuration.BatchSize ?? 16);
-        var perItem = 1.0 / _maxPerSecond;
-
-        for (var i = 0; i < items.Count; i += batchSize)
-        {
-            ct.ThrowIfCancellationRequested();
-            var batch = items.Skip(i).Take(batchSize).ToList();
-            var texts = batch
-                .Select(it => MetadataBlockBuilder.Build(it, _library.GetPeople(it)))
-                .Where(t => !string.IsNullOrWhiteSpace(t))
-                .ToList();
-            if (texts.Count == 0)
-            {
-                continue;
-            }
-
-            var vectors = _embeddings.EmbedBatch(texts);
-            for (var j = 0; j < vectors.Count; j++)
-            {
-                if (vectors[j].Length == 0)
-                {
-                    continue;
-                }
-
-                var item = batch[j];
-                _store.UpsertItem(ItemProjector.Project(item, _library.GetPeople(item), vectors[j]));
-            }
-
-            await Task.Delay(TimeSpan.FromSeconds(batch.Count * perItem), ct).ConfigureAwait(false);
-        }
+        await EmbedItemsAsync(items, ct).ConfigureAwait(false);
 
         _store.SetMeta("last_full_reindex", DateTime.UtcNow.Ticks.ToString(CultureInfo.InvariantCulture));
         _logger.LogInformation("Full reindex complete; {Count} items processed.", items.Count);
@@ -224,6 +191,88 @@ public sealed class IndexWorker : BackgroundService
         // Refresh interactions from current UserData too — picks up history that predates plugin
         // install or changes made outside playback events (manual marks, favorites, imports).
         await BackfillInteractionsAsync(null, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Cheap new-content catch-up: embed only movies/shows that are NOT already in the store. This is
+    /// the scheduled safety net for items the real-time event hooks can miss (added while the server
+    /// was down, bulk library operations, pre-existing media). Runs far more often than the full
+    /// reindex but does a fraction of the work when the library is stable.
+    /// </summary>
+    private async Task EmbedMissingAsync(CancellationToken ct)
+    {
+        var items = QueryEmbeddable();
+        var known = _store.GetAllItems();
+        var knownIds = known.Count > 0 ? known.Select(i => i.Id).ToHashSet() : null;
+        var missing = knownIds is null
+            ? items
+            : items.Where(it => !knownIds.Contains(it.Id)).ToList();
+
+        _logger.LogInformation("New-content scan: {Missing} of {Total} item(s) missing from the store.", missing.Count, items.Count);
+        if (missing.Count == 0)
+        {
+            return;
+        }
+
+        var embedded = await EmbedItemsAsync(missing, ct).ConfigureAwait(false);
+        _logger.LogInformation("New-content scan complete: embedded {Count} item(s).", embedded);
+    }
+
+    /// <summary>Shared batch embed + upsert loop for a set of items (used by full reindex and the new-content scan).</summary>
+    private async Task<int> EmbedItemsAsync(IReadOnlyList<BaseItem> items, CancellationToken ct)
+    {
+        if (items.Count == 0)
+        {
+            return 0;
+        }
+
+        var batchSize = Math.Max(1, Plugin.Instance?.Configuration.BatchSize ?? 16);
+        var perItem = 1.0 / _maxPerSecond;
+        var embedded = 0;
+
+        for (var i = 0; i < items.Count; i += batchSize)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            // Pair each item with its text and drop empty ones BEFORE embedding, so vector[j] still
+            // lines up with the correct item (batching after a filter would misalign them).
+            var batch = items.Skip(i).Take(batchSize)
+                .Select(it => (Item: it, Text: MetadataBlockBuilder.Build(it, _library.GetPeople(it))))
+                .Where(p => !string.IsNullOrWhiteSpace(p.Text))
+                .ToList();
+            if (batch.Count == 0)
+            {
+                continue;
+            }
+
+            var vectors = _embeddings.EmbedBatch(batch.Select(p => p.Text).ToList());
+            for (var j = 0; j < vectors.Count; j++)
+            {
+                if (vectors[j].Length == 0)
+                {
+                    continue;
+                }
+
+                var item = batch[j].Item;
+                _store.UpsertItem(ItemProjector.Project(item, _library.GetPeople(item), vectors[j]));
+                embedded++;
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(batch.Count * perItem), ct).ConfigureAwait(false);
+        }
+
+        return embedded;
+    }
+
+    private IReadOnlyList<BaseItem> QueryEmbeddable()
+    {
+        var query = new InternalItemsQuery
+        {
+            IncludeItemTypes = new[] { BaseItemKind.Movie, BaseItemKind.Series },
+            Recursive = true,
+            IsVirtualItem = false
+        };
+        return _library.GetItemList(query);
     }
 
     private void ProcessInteraction(Guid userId, Guid itemId)

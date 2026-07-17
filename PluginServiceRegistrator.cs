@@ -43,6 +43,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddHostedService<EmbeddingWarmupService>();
 
         // Scheduled tasks (Dashboard → Scheduled Tasks). Discovered as IEnumerable<IScheduledTask>.
+        serviceCollection.AddSingleton<MediaBrowser.Model.Tasks.IScheduledTask, ScheduledTasks.ScanForNewContentTask>();
         serviceCollection.AddSingleton<MediaBrowser.Model.Tasks.IScheduledTask, ScheduledTasks.FullReindexTask>();
         serviceCollection.AddSingleton<MediaBrowser.Model.Tasks.IScheduledTask, ScheduledTasks.RetrainTask>();
     }
