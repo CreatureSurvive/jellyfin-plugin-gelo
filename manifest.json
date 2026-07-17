@@ -22,6 +22,14 @@
         "sourceUrl": "https://github.com/CreatureSurvive/jellyfin-plugin-gelo/releases/download/v1.1.0.0/gelo-recommendations_1.1.0.0.zip",
         "checksum": "97d6218f1bf760dcce8af7525a665b3283b1f57c3d803af2878d18b0a8620f19",
         "timestamp": "2026-07-14T22:02:59Z"
+      },
+      {
+        "version": "1.2.0.0",
+        "changelog": "\nA tunable \"For You\" surface, a new home rail, thinner-shelf cleanup, and a smarter indexing cadence.\n\n### Added\n- **\"Recommended For You\" home rail.** The flat ranked list now leads the Gelo home block, rendered as\n  native cards alongside the existing shelves. Shelves and recs fetch in parallel; a recs-call failure\n  can't take the shelves down, and a cold user with no shelves now still gets a For You rail.\n- **Graded variety on `/Recommendations`** — `?variety=off|low|medium|high` (plus `?seed=`) let a\n  client dial the flat list from exact top matches to daily-rotating discovery, and a `RecommendationsVariety`\n  setting defines the server default. Reuses the shelves engine's diversity + seeded-exploration pipeline.\n- **\"Scan for new content\" scheduled task** — every 3h, embeds ONLY items missing from the store. A cheap\n  safety net for items the real-time library hooks miss (added while the server was down, bulk scans).\n- **Min items per shelf** setting (default 3) — shelves with only 1–2 items are dropped so the home isn't\n  dotted with stub rails.\n\n### Changed\n- **Retrain user models** runs daily at **03:00** (was 04:07); **Full library reindex** weekly at\n  **Sunday 02:00** (was 03:30). New content continues to embed in real time via library event hooks.\n\n### Fixed\n- Eagerly warm up the ONNX session at startup so `/Ping`'s `EmbeddingsReady` is accurate — the session\n  was lazy and could report \"not ready\" on a stable library even though serving worked from cached vectors.\n",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/CreatureSurvive/jellyfin-plugin-gelo/releases/download/v1.2.0.0/gelo-recommendations_1.2.0.0.zip",
+        "checksum": "750ccd5af3863f16d35759db59a9ef4d859f1c5294252bce4469442cf0d4d9be",
+        "timestamp": "2026-07-17T16:03:50Z"
       }
     ]
   }
