@@ -2,8 +2,10 @@
 
 A semantic, context-aware recommendation engine for [Jellyfin](https://jellyfin.org).
 
-Gelo learns what you actually watch and turns it into two things:
+Gelo learns what you actually watch and turns it into three things:
 
+- **Recommended For You** — a flat, ranked rail of the best next watches for each user, leading
+  the home screen. Dial it from precise top matches to daily-rotating discovery.
 - **Home shelves** — dynamic, rotating rails ("Because you watched…", mood runs, genre dives,
   collection picks, wildcard discoveries) that render directly on the Jellyfin home screen.
 - **More-Like-This** — a "Recommended" rail on every movie/series detail page, built from
@@ -20,8 +22,9 @@ locally with a bundled transformer model.
   relevance-weighted taste centroid) handles cold-starts and sub-ms item-to-item lookups; an
   optional per-user trained ranker learns engagement probability from your watch history once
   there is enough of it.
-- **Home-screen integration.** Recommendation rails are injected straight into the Jellyfin web
-  home and detail pages with native-styled cards — no separate app or page.
+- **Home-screen integration.** A "Recommended For You" rail plus dynamic shelves are injected
+  straight into the Jellyfin web home, with a "More Like This" rail on detail pages — native-styled
+  cards, no separate app or page.
 - **Learns from real engagement.** Time-decayed relevance weights completion, play count,
   favorites, and dwell, and deliberately ignores watchlist noise, so the taste profile tracks
   what you actually enjoy over time.
@@ -29,7 +32,8 @@ locally with a bundled transformer model.
 - **Incremental.** Indexes off live library/user-data events; a weekly catch-up re-embed keeps
   new media covered.
 - **Tunable.** Every weight, decay, shelf count, and tier toggle is exposed in the dashboard,
-  with sensible defaults.
+  with sensible defaults — including a "For You" variety dial from precise top matches to
+  daily-rotating discovery.
 
 ---
 
@@ -141,6 +145,9 @@ Open **Dashboard → Plugins → Gelo Recommendations**. Key options:
 - **Relevance weights** (`completion / playCount / favorite / dwell`) — should sum to ~1.0.
 - **Decay half-life (days)** — temporal decay (default 90).
 - **Max shelves**, **items per shelf**, **diversity / exploration / freshness** toggles.
+- **"For You" variety** — how much the flat Recommended-For-You list varies: `off` (exact top
+  matches), `low` (spread across genres), `medium`/`high` (wider pool + daily-rotating discovery).
+  The `?variety=` request param overrides this per call.
 - **Web UI shelf count / position** — how many rails render and where (`top` / `afterFirst` / `bottom`).
 - **Embedding batch size / max embeds per second / execution provider** — throughput vs. load.
 
@@ -160,7 +167,7 @@ without elevation.
 | `GET` | `/Ping` | Non-admin readiness probe: `{ Enabled, EmbeddingsReady, ItemCount, Ready }` |
 | `GET` | `/Items/{itemId}/Similar` | Ranked similar items (`Id`, `Name`, `Type`, `Score`); `?limit&unwatched&type&userId&collection` |
 | `GET` | `/Users/{userId}/Shelves` | Home shelves (`Title`, `Paradigm`, `Items[]`); optional `?limit&unwatched&type` |
-| `GET` | `/Users/{userId}/Recommendations` | Flat ranked "for you" list (`Id`, `Name`, `Type`, `Score`); optional `?limit&unwatched&type` |
+| `GET` | `/Users/{userId}/Recommendations` | Flat ranked "for you" list (`Id`, `Name`, `Type`, `Score`); optional `?limit&unwatched&type&variety&seed` |
 | `GET` | `/Status` | Admin-only engine status (`ItemCount`, `Dimension`, `EmbeddingsReady`, `LastFullReindex`, `ModelId`) |
 | `POST` | `/Users/{userId}/Feedback` | Record `more` / `less` for an item (body: `{ "itemId", "kind" }`) |
 | `GET` | `/Users/{userId}/Feedback` | List recorded feedback |
@@ -170,10 +177,13 @@ without elevation.
   the plugin is enabled and at least one item is indexed. `EmbeddingsReady` is reported separately and
   only reflects the lazily-loaded ONNX session — it can be `false` right after a restart even though
   serving already works from the cached vectors.
-- **`/Recommendations`** returns a single flat ranked list (the engine's primary surface): cosine
-  similarity to the user's taste centroid, re-ranked by the trained model when enabled, with a
-  community-rating fallback for cold users. `unwatched` defaults to `true` (excludes items the user
-  has already engaged with).
+- **`/Recommendations`** returns a single flat ranked list (the engine's primary surface — and what
+  the home "Recommended For You" rail renders): cosine similarity to the user's taste centroid,
+  re-ranked by the trained model when enabled, with a community-rating fallback for cold users.
+  `unwatched` defaults to `true` (excludes items the user has already engaged with). `variety`
+  (`off`/`low`/`medium`/`high`, default `off`) optionally applies diversity soft-caps and injects
+  seeded exploration picks so the list isn't the same static set every call — exploration rotates
+  per user per day; `seed` overrides that (to page or force a fresh shuffle).
 - **`/Shelves`** params (`limit` caps items per shelf, `unwatched` drops played items, `type` filters)
   are a coarse post-filter applied after the diversity pipeline — prefer server config for structural
   control.
@@ -213,10 +223,10 @@ Library/UserData events ──▶ IndexWorker ──▶ EmbeddingService (MiniLM
            └──────────────▶ SmartShelfEngine ◀──┴──────────────────────────────────┘
                                  │  (10-category shelves + rerank pipeline)
                                  ▼
-                      RecommendationService  ──▶  /Shelves, /Similar, /Status, /Feedback
+                      RecommendationService  ──▶  /Ping, /Shelves, /Recommendations, /Similar, /Status, /Feedback
                                  │
                                  ▼
-                  gelo.js (injected into jellyfin-web)  ──▶  home rails + detail rail
+                  gelo.js (injected into jellyfin-web)  ──▶  home "For You" + shelves + detail rail
 ```
 
 **Native-loading care.** Gelo bundles the ONNX Runtime natives for `linux-x64` (flattened to the
@@ -255,36 +265,6 @@ touch LFS bandwidth.
 
 For a non-linux-x64 target, change the `-r` RID and adjust `package.sh`'s native-flattening step
 to match the platform's ONNX `.so`/`.dylib`/`.dll` names.
-
----
-
-## Releasing
-
-Releases are cut by pushing a tag; the [Release workflow](.github/workflows/release.yml) builds,
-packages, publishes, and updates the repository manifest automatically.
-
-1. Bump `version` in **both** `build.yaml` and `Jellyfin.Plugin.Gelo.csproj` (keep them in sync).
-2. Add a `## [<version>] — <date>` entry to `CHANGELOG.md`.
-3. Commit, then tag and push:
-   ```bash
-   git tag v1.0.0.0
-   git push origin v1.0.0.0
-   ```
-4. The workflow publishes the plugin, builds `gelo-recommendations_<version>.zip` + a SHA-256,
-   creates the GitHub release with the ZIP attached, and appends the new version (with `sourceUrl`
-   and `checksum`) to `manifest.json` on the default branch. Users who added the repository get the
-   update automatically.
-
-**Repository manifest.** `manifest.json` is the file Jellyfin reads when a user adds the repository
-URL above. It ships with an empty `versions` list; the release workflow populates it — each entry
-points at a release asset and carries its SHA-256 so installs are verified. Requires the repo's
-**Settings → Actions → General → Workflow permissions** set to "Read and write permissions" so the
-`GITHUB_TOKEN` can create the release and push the manifest commit.
-
-> **LFS quota.** GitHub's free tier covers 1 GB of LFS storage and 1 GB/month bandwidth. The model
-> is ~87 MB, so this is comfortable for normal source-clone traffic but can be exceeded if the repo
-> gets very popular. If that happens, move the model to a GitHub release asset and download it in
-> the build instead of tracking it in LFS.
 
 ---
 
