@@ -89,8 +89,16 @@ public sealed class RecommendationService
     /// re-orders an oversampled pool by its predicted engagement probability. Cold users (no profile)
     /// fall back to a community-rating ranking. When <paramref name="unwatched"/> is true (the
     /// default), items the user has already engaged with are excluded.
+    /// <para>
+    /// <paramref name="variety"/> ("off"|"low"|"medium"|"high") optionally diversifies the result and
+    /// injects exploration picks so the list is not the same static set every time. "off" (the default)
+    /// reproduces the exact deterministic top-N. Exploration is seeded per user per day (stable within
+    /// a day, rotates daily); pass an explicit <paramref name="seed"/> to override (e.g. to page or
+    /// force a fresh shuffle). An unset <paramref name="variety"/> falls back to the server's
+    /// <c>RecommendationsVariety</c> config.
+    /// </para>
     /// </summary>
-    public List<SimilarItemDto> Recommendations(Guid userId, int limit, bool unwatched, string? type)
+    public List<SimilarItemDto> Recommendations(Guid userId, int limit, bool unwatched, string? type, string? variety = null, int? seed = null)
     {
         if (IsDisabled)
         {
@@ -118,14 +126,28 @@ public sealed class RecommendationService
         bool Pred(IndexedItem it)
             => (basePredicate is null || basePredicate(it)) && (engaged is null || !engaged.Contains(it.Id));
 
+        var level = ResolveVariety(variety, cfg?.RecommendationsVariety);
+        var (poolMult, doDiversity, exploreFrac) = VarietyProfile(level);
+        // Off keeps the original oversample cap (limit*5, max 100) so behavior is byte-identical;
+        // higher variety widens the pool so exploration can reach deeper, lower-affinity items.
+        var poolSize = level == Variety.Off
+            ? Math.Min(limit * 5, 100)
+            : Math.Clamp(limit * poolMult, limit, 400);
+        poolSize = Math.Min(poolSize, items.Count);
+
+        // Build an ordered candidate pool + the per-item display score (cosine affinity, or community
+        // rating on the cold path). The trained ranker re-orders the warm pool when enabled.
+        List<IndexedItem> ranked;
+        var scoreOf = new Dictionary<Guid, float>();
+
         var centroid = (watchedCount >= contentMin && interactions.Count > 0) ? GetCentroid(userId) : null;
         if (centroid is not null && centroid.ItemCount > 0)
         {
             // Warm: cosine to the taste centroid over an oversampled pool, optional trained rerank.
-            var poolSize = Math.Min(limit * 5, 100);
             var pool = VectorMath.TopKSimilar(centroid.Vector, items, null, poolSize, Pred);
+            scoreOf = pool.ToDictionary(p => p.Item.Id, p => p.Score);
 
-            IEnumerable<(IndexedItem Item, float Affinity)> ranked = pool.Select(p => (p.Item, p.Score));
+            IEnumerable<IndexedItem> ordered = pool.OrderByDescending(p => p.Score).Select(p => p.Item);
             if (cfg?.EnableTier2Ranker is true && _ranker.IsAvailable(userId) && pool.Count > 0)
             {
                 var poolItems = pool.Select(p => p.Item).ToList();
@@ -133,27 +155,51 @@ public sealed class RecommendationService
                 var probs = _ranker.Score(userId, poolItems, aff);
                 if (probs is { Length: > 0 } && probs.Length == pool.Count)
                 {
-                    ranked = pool
-                        .Select((p, i) => (p.Item, Affinity: p.Score, Prob: probs[i]))
+                    ordered = pool
+                        .Select((p, i) => (p.Item, Prob: probs[i], Aff: p.Score))
                         .OrderByDescending(t => t.Prob)
-                        .ThenByDescending(t => t.Affinity)
-                        .Select(t => (t.Item, t.Affinity));
+                        .ThenByDescending(t => t.Aff)
+                        .Select(t => t.Item);
                 }
             }
 
-            return ranked
-                .Take(limit)
-                .Select(t => new SimilarItemDto(t.Item.Id, t.Item.Name, t.Item.ItemType, t.Affinity))
+            ranked = ordered.ToList();
+        }
+        else
+        {
+            // Cold: no taste profile yet — rank by community rating, then recency.
+            ranked = items
+                .Where(i => i.Vector.Length > 0 && Pred(i))
+                .OrderByDescending(i => i.CommunityRating ?? 0)
+                .ThenByDescending(i => i.DateCreatedTicks ?? 0)
+                .Take(poolSize)
                 .ToList();
+            foreach (var i in ranked)
+            {
+                scoreOf[i.Id] = i.CommunityRating.HasValue ? (float)i.CommunityRating.Value : 0f;
+            }
         }
 
-        // Cold: no taste profile yet — rank by community rating, then recency.
-        return items
-            .Where(i => i.Vector.Length > 0 && Pred(i))
-            .OrderByDescending(i => i.CommunityRating ?? 0)
-            .ThenByDescending(i => i.DateCreatedTicks ?? 0)
+        // Variety post-processing: diversity soft-caps (deterministic spread) then seeded exploration
+        // (rotating discovery picks). Skipped entirely for Off, which keeps the legacy exact top-N.
+        if (level != Variety.Off && ranked.Count > 0)
+        {
+            if (doDiversity)
+            {
+                ranked = RerankPipeline.DiversifyRanking(ranked);
+            }
+
+            var explorationCount = Math.Clamp((int)Math.Ceiling(limit * exploreFrac), 0, Math.Max(0, limit / 2 - 1));
+            if (explorationCount > 0 && ranked.Count > limit)
+            {
+                var rng = new SeededRandom(ResolveSeed(userId, seed));
+                ranked = RerankPipeline.InjectExplorationFlat(ranked, rng, limit, explorationCount);
+            }
+        }
+
+        return ranked
             .Take(limit)
-            .Select(i => new SimilarItemDto(i.Id, i.Name, i.ItemType, i.CommunityRating.HasValue ? (float)i.CommunityRating.Value : 0f))
+            .Select(t => new SimilarItemDto(t.Id, t.Name, t.ItemType, scoreOf.GetValueOrDefault(t.Id)))
             .ToList();
     }
 
@@ -269,6 +315,45 @@ public sealed class RecommendationService
 
     private static int EffectiveInt(int? configured, int fallback, int min, int max)
         => configured.HasValue && configured.Value >= min && configured.Value <= max ? configured.Value : fallback;
+
+    /// <summary>Flat-list variety tiers. <see cref="Recommendations"/> post-processing intensity.</summary>
+    private enum Variety { Off, Low, Medium, High }
+
+    private static Variety ResolveVariety(string? requested, string? configuredDefault)
+    {
+        var raw = !string.IsNullOrWhiteSpace(requested) ? requested : configuredDefault;
+        return raw?.Trim().ToLowerInvariant() switch
+        {
+            "low" or "1" => Variety.Low,
+            "medium" or "med" or "2" => Variety.Medium,
+            "high" or "3" => Variety.High,
+            _ => Variety.Off,
+        };
+    }
+
+    /// <summary>Per-tier profile: oversample multiplier, whether to diversify, and the exploration
+    /// fraction of <c>limit</c>. Low only spreads the existing top matches; Medium/High widen the pool
+    /// and rotate discovery picks in.</summary>
+    private static (int PoolMult, bool Diversity, double ExploreFrac) VarietyProfile(Variety v) => v switch
+    {
+        Variety.Low => (5, true, 0.0),
+        Variety.Medium => (10, true, 0.15),
+        Variety.High => (20, true, 0.30),
+        _ => (5, false, 0.0),
+    };
+
+    /// <summary>Exploration seed: an explicit value wins; otherwise a stable-per-user, rotating-per-day
+    /// bucket so the "For You" list feels like a daily mix rather than a per-refresh shuffle.</summary>
+    private static ulong ResolveSeed(Guid userId, int? seed)
+    {
+        if (seed.HasValue)
+        {
+            return (ulong)seed.Value;
+        }
+
+        var dayIndex = (int)(DateTime.UtcNow.Date - new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalDays;
+        return SeededRandom.StableSeed(userId.ToString()) ^ ((ulong)dayIndex * 0x9E3779B97F4A7C15UL);
+    }
 
     public StatusDto Status()
     {

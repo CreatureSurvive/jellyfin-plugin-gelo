@@ -357,6 +357,86 @@ internal static class RerankPipeline
         return result;
     }
 
+    /// <summary>
+    /// Flat-list diversity: the same sliding-window soft-caps shelves use (genre / decade / creator),
+    /// applied to an already-ranked candidate list so the consecutive results don't clump. The score
+    /// tuple is positional only — <see cref="ApplyDiversity"/> iterates in input order and discards it —
+    /// so we feed the ranking index to preserve the caller's order. Deterministic.
+    /// </summary>
+    internal static List<IndexedItem> DiversifyRanking(IReadOnlyList<IndexedItem> ranked)
+    {
+        if (ranked.Count <= 1)
+        {
+            return ranked.ToList();
+        }
+
+        var scored = new List<(IndexedItem Item, double Score)>(ranked.Count);
+        for (var i = 0; i < ranked.Count; i++)
+        {
+            scored.Add((ranked[i], i));
+        }
+
+        return ApplyDiversity(scored);
+    }
+
+    /// <summary>
+    /// Flat-list exploration: keep the top <paramref name="resultLimit"/> − explorationCount strongest
+    /// matches, then draw explorationCount items from deeper in the ranking (seeded-shuffled) and
+    /// stagger them into the front window so a few discovery picks surface each pass. Brings in items
+    /// that pure top-N would never show; the seed controls rotation. Returns ≤ resultLimit items in a
+    /// new list (caller still Take(limit)s). No-op when there aren't enough candidates to explore.
+    /// </summary>
+    internal static List<IndexedItem> InjectExplorationFlat(List<IndexedItem> ranked, SeededRandom rng, int resultLimit, int explorationCount)
+    {
+        if (ranked.Count <= resultLimit || explorationCount <= 0)
+        {
+            return ranked;
+        }
+
+        explorationCount = Math.Min(explorationCount, Math.Max(1, resultLimit / 3));
+        var frontCap = resultLimit - explorationCount;
+        if (frontCap <= 0)
+        {
+            return ranked;
+        }
+
+        var front = ranked.Take(frontCap).ToList();
+        var tailPool = ranked.Skip(frontCap).ToList();
+        if (tailPool.Count == 0)
+        {
+            return ranked;
+        }
+
+        var picks = new List<IndexedItem>(explorationCount);
+        for (var i = 0; i < explorationCount && tailPool.Count > 0; i++)
+        {
+            var idx = rng.NextInt(tailPool.Count);
+            picks.Add(tailPool[idx]);
+            tailPool.RemoveAt(idx);
+        }
+
+        // Stagger the discovery picks into the front at roughly even intervals (front and tail are
+        // disjoint by construction, so no dedupe is needed).
+        var result = new List<IndexedItem>(resultLimit);
+        var step = Math.Max(1, front.Count / (picks.Count + 1));
+        var pickIdx = 0;
+        for (var i = 0; i < front.Count; i++)
+        {
+            result.Add(front[i]);
+            if (pickIdx < picks.Count && (i + 1) % step == 0)
+            {
+                result.Add(picks[pickIdx++]);
+            }
+        }
+
+        while (pickIdx < picks.Count)
+        {
+            result.Add(picks[pickIdx++]);
+        }
+
+        return result;
+    }
+
     private static string ReasonFor(IndexedItem it)
         => it.Year is { } y ? $"{y}" : it.CommunityRating is { } r ? FormattableString.Invariant($"★ {r:F1}") : string.Empty;
 }

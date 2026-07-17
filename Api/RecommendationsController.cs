@@ -70,14 +70,16 @@ public sealed class RecommendationsController : ControllerBase
         [FromRoute] Guid userId,
         [FromQuery] int limit = 24,
         [FromQuery] bool unwatched = true,
-        [FromQuery] string? type = null)
+        [FromQuery] string? type = null,
+        [FromQuery] string? variety = null,
+        [FromQuery] int? seed = null)
     {
         if (userId == Guid.Empty)
         {
             return BadRequest("Invalid userId.");
         }
 
-        return Ok(_recommendations.Recommendations(userId, limit, unwatched, type));
+        return Ok(_recommendations.Recommendations(userId, limit, unwatched, type, variety, seed));
     }
 
     /// <summary>GET /CustomRecommendations/Status (admin only)</summary>

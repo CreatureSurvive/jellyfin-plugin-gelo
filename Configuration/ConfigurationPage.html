@@ -87,6 +87,16 @@
                         </label>
                         <div class="fieldDescription checkboxFieldDescription">+0.08·(1 − age/30d) for media added in the last 30 days.</div>
                     </div>
+
+                    <div class="selectContainer">
+                        <select is="emby-select" id="recommendationsVariety" name="recommendationsVariety" label="“For You” variety">
+                            <option value="off">Off — exact top matches</option>
+                            <option value="low">Low — spread across genres</option>
+                            <option value="medium">Medium — spread + daily discovery</option>
+                            <option value="high">High — wide pool + more discovery</option>
+                        </select>
+                        <div class="fieldDescription">How much the flat Recommended-For-You list varies. Clients override per request with <code>?variety=</code>; discovery items rotate daily (or per <code>?seed=</code>).</div>
+                    </div>
                 </fieldset>
 
                 <fieldset class="verticalSection">
@@ -278,7 +288,8 @@
     { id: "executionProviderOrder", k: "ExecutionProviderOrder", t: "s" },
     { id: "modelPath", k: "ModelPath", t: "s" },
     { id: "vocabPath", k: "VocabPath", t: "s" },
-    { id: "webUIPosition", k: "WebUIPosition", t: "s" }
+    { id: "webUIPosition", k: "WebUIPosition", t: "s" },
+    { id: "recommendationsVariety", k: "RecommendationsVariety", t: "s" }
   ];
   var fieldMap = {};
   FIELDS.forEach(function (F) { fieldMap[F.id] = F; });

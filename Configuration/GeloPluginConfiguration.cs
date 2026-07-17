@@ -61,6 +61,13 @@ public class GeloPluginConfiguration : BasePluginConfiguration
 
     public int SimilarLimit { get; set; } = Tuning.DefaultSimilarLimit;
 
+    /// <summary>
+    /// Default variety for the flat /Users/{id}/Recommendations list: "off" (deterministic top-N — the
+    /// original behavior), "low" (genre/decade/creator spread), "medium" (spread + daily-rotating
+    /// discovery), or "high" (wider pool + more discovery). Clients override per request with ?variety=.
+    /// </summary>
+    public string RecommendationsVariety { get; set; } = "off";
+
     /// <summary>Diversity soft-caps (genre/decade/creator windows) on shelf rerank.</summary>
     public bool EnableDiversity { get; set; } = true;
 
