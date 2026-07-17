@@ -5,6 +5,30 @@ All notable changes to Gelo Recommendations are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0.0] — 2026-07-17
+
+A tunable "For You" surface, a new home rail, thinner-shelf cleanup, and a smarter indexing cadence.
+
+### Added
+- **"Recommended For You" home rail.** The flat ranked list now leads the Gelo home block, rendered as
+  native cards alongside the existing shelves. Shelves and recs fetch in parallel; a recs-call failure
+  can't take the shelves down, and a cold user with no shelves now still gets a For You rail.
+- **Graded variety on `/Recommendations`** — `?variety=off|low|medium|high` (plus `?seed=`) let a
+  client dial the flat list from exact top matches to daily-rotating discovery, and a `RecommendationsVariety`
+  setting defines the server default. Reuses the shelves engine's diversity + seeded-exploration pipeline.
+- **"Scan for new content" scheduled task** — every 3h, embeds ONLY items missing from the store. A cheap
+  safety net for items the real-time library hooks miss (added while the server was down, bulk scans).
+- **Min items per shelf** setting (default 3) — shelves with only 1–2 items are dropped so the home isn't
+  dotted with stub rails.
+
+### Changed
+- **Retrain user models** runs daily at **03:00** (was 04:07); **Full library reindex** weekly at
+  **Sunday 02:00** (was 03:30). New content continues to embed in real time via library event hooks.
+
+### Fixed
+- Eagerly warm up the ONNX session at startup so `/Ping`'s `EmbeddingsReady` is accurate — the session
+  was lazy and could report "not ready" on a stable library even though serving worked from cached vectors.
+
 ## [1.1.0.0] — 2026-07-14
 
 Client-facing API additions: a non-admin readiness probe, a flat ranked list, and shelf shaping.
