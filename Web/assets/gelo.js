@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Dana Buehre
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/* Gelo client — injects recommendation shelves into the jellyfin-web home and a "Recommended"
- * rail onto Movie/Series detail pages. Reads the user's ApiClient (auto-authenticated). DOM-tolerant:
+/* Gelo client — injects a "Recommended For You" rail plus categorized recommendation shelves into
+ * the jellyfin-web home, and a "Recommended" rail onto Movie/Series detail pages. Reads the user's
+ * ApiClient (auto-authenticated). DOM-tolerant:
  * it locates the home by the stable ".verticalSection" sections (not by chunk internals) and renders
  * its own upgrade-resilient cards, so it survives jellyfin-web point releases.
  *
@@ -26,6 +27,8 @@
     var MAX = (CFG.shelfCount | 0) || 4;
     var POS = (CFG.position === "top" || CFG.position === "bottom") ? CFG.position : "afterFirst";
     var DETAIL_LIMIT = (CFG.detailLimit | 0) || 12;
+    var FORYOU_TITLE = (CFG.forYouTitle || "Recommended For You");
+    var FORYOU_LIMIT = (CFG.forYouLimit | 0) || 24;
 
     var HOME_HOST_SEL = 'gelo-host[data-gelo="home"]';
     var DETAIL_HOST_SEL = 'gelo-host[data-gelo="detail"]';
@@ -189,10 +192,11 @@
             "</section>";
     }
 
-    function railHtml(title, items) {
+    function railHtml(title, items, extraClass) {
         if (!items || !items.length) return "";
         var cards = cardsHtml(items);
-        return '<section class="verticalSection gelo-rail">' +
+        var cls = "verticalSection gelo-rail" + (extraClass ? " " + extraClass : "");
+        return '<section class="' + cls + '">' +
             '<div class="sectionTitleContainer sectionTitleContainer-cards padded-left">' +
             '<h2 class="sectionTitle sectionTitle-cards">' + esc(title) + "</h2></div>" +
             '<div is="emby-scroller" class="padded-top-focusscale padded-bottom-focusscale" data-centerfocus="true">' +
@@ -295,13 +299,37 @@
         placeHome(host, container);
         homeHostEl = host;
 
-        geloGet("/Users/" + uid() + "/Shelves").then(function (shelves) {
-            shelves = (shelves || []).slice(0, MAX);
-            if (!shelves.length) { dropHome(host); return; }
-            return Promise.all(shelves.map(function (sh) {
+        // Fetch the categorized shelves AND the flat "For You" list in parallel. "Recommended For You"
+        // is the engine's primary surface, so it leads the block. We omit ?variety= so the rail honors
+        // the server's RecommendationsVariety default (off = static, medium/high = daily rotation). A
+        // failure of the recs call must NOT take the shelves down with it, so it has its own catch.
+        var shelvesP = geloGet("/Users/" + uid() + "/Shelves");
+        var recsP = geloGet("/Users/" + uid() + "/Recommendations?limit=" + FORYOU_LIMIT + "&unwatched=true")
+            .catch(function () { return []; });
+
+        Promise.all([shelvesP, recsP]).then(function (results) {
+            var shelves = (results[0] || []).slice(0, MAX);
+            var recs = results[1] || [];
+
+            // Nothing to show at all → pull the placeholder.
+            if (!shelves.length && !recs.length) { dropHome(host); return; }
+
+            var tasks = [];
+            // The For You rail is tagged gelo-shelf so the home-positioning logic (which keys off
+            // .verticalSection:not(.gelo-shelf) to find the first NATIVE section) treats it as part of
+            // the Gelo block, never as a native section to position around.
+            if (recs.length) {
+                var recIds = recs.map(function (x) { return x.Id; }).filter(Boolean);
+                tasks.push(hydrate(recIds).then(function (items) {
+                    return railHtml(FORYOU_TITLE, items, "gelo-shelf");
+                }));
+            }
+            shelves.forEach(function (sh) {
                 var ids = (sh.Items || []).map(function (x) { return x.Id; }).filter(Boolean);
-                return hydrate(ids).then(function (items) { return shelfHtml(sh, items); });
-            })).then(function (htmls) {
+                tasks.push(hydrate(ids).then(function (items) { return shelfHtml(sh, items); }));
+            });
+
+            return Promise.all(tasks).then(function (htmls) {
                 if (!host.isConnected) { homeHostEl = null; return; }
                 host.classList.remove("gelo-loading");
                 var html = htmls.filter(Boolean).join("");
